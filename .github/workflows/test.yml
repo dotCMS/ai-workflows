@@ -2,9 +2,9 @@ name: Test Workflows
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   yaml-lint:
@@ -72,13 +72,11 @@ jobs:
           for file in .github/workflows/*.yml .github/workflows/*.yaml; do
             if [ -f "$file" ] && grep -q "workflow_call:" "$file"; then
               echo "Validating reusable workflow secrets in $file"
-              
               # Check if workflow uses secrets but doesn't declare them
               if grep -q "secrets\." "$file" && ! grep -q "secrets:" "$file"; then
                 echo "ERROR: $file uses secrets but doesn't declare them in workflow_call"
                 exit 1
               fi
-              
               # Check for required ANTHROPIC_API_KEY if Claude CLI is used
               if grep -q "claude\|anthropic" "$file" && ! grep -q "ANTHROPIC_API_KEY" "$file"; then
                 echo "WARNING: $file appears to use Claude but doesn't require ANTHROPIC_API_KEY secret"
