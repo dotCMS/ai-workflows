@@ -15,10 +15,10 @@ jobs:
     with:
       # Optional: Specify files to review (defaults to all changed files)
       # files_to_review: 'src/main.js,src/utils.js'
-      
+
       # Optional: Set review focus (general, security, performance, best-practices)
       review_focus: 'security'
-      
+
       # Optional: Maximum number of files to review
       max_files: 15
     secrets:
