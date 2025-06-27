@@ -67,8 +67,16 @@ jobs:
   # Interactive Claude mentions in comments
   claude-comment-mention:
     if: |
-      (github.event_name == 'issue_comment' && (contains(github.event.comment.body, '@claude') || contains(github.event.comment.body, '@Claude') || contains(github.event.comment.body, '@CLAUDE'))) ||
-      (github.event_name == 'pull_request_review_comment' && (contains(github.event.comment.body, '@claude') || contains(github.event.comment.body, '@Claude') || contains(github.event.comment.body, '@CLAUDE')))
+      (github.event_name == 'issue_comment' && (
+        contains(github.event.comment.body, '@claude') ||
+        contains(github.event.comment.body, '@Claude') ||
+        contains(github.event.comment.body, '@CLAUDE')
+      )) ||
+      (github.event_name == 'pull_request_review_comment' && (
+        contains(github.event.comment.body, '@claude') ||
+        contains(github.event.comment.body, '@Claude') ||
+        contains(github.event.comment.body, '@CLAUDE')
+      ))
     uses: ${{ inputs.executor_workflow_ref }}
     with:
       trigger_mode: interactive
@@ -81,7 +89,11 @@ jobs:
   # Interactive Claude mentions in PR reviews
   claude-review-mention:
     if: |
-      github.event_name == 'pull_request_review' && (contains(github.event.review.body, '@claude') || contains(github.event.review.body, '@Claude') || contains(github.event.review.body, '@CLAUDE'))
+      github.event_name == 'pull_request_review' && (
+        contains(github.event.review.body, '@claude') ||
+        contains(github.event.review.body, '@Claude') ||
+        contains(github.event.review.body, '@CLAUDE')
+      )
     uses: ${{ inputs.executor_workflow_ref }}
     with:
       trigger_mode: interactive
@@ -95,8 +107,18 @@ jobs:
   claude-issue-mention:
     if: |
       github.event_name == 'issues' &&
-      ((contains(github.event.issue.body, '@claude') || contains(github.event.issue.body, '@Claude') || contains(github.event.issue.body, '@CLAUDE')) ||
-       (contains(github.event.issue.title, '@claude') || contains(github.event.issue.title, '@Claude') || contains(github.event.issue.title, '@CLAUDE')))
+      (
+        (
+          contains(github.event.issue.body, '@claude') ||
+          contains(github.event.issue.body, '@Claude') ||
+          contains(github.event.issue.body, '@CLAUDE')
+        ) ||
+        (
+          contains(github.event.issue.title, '@claude') ||
+          contains(github.event.issue.title, '@Claude') ||
+          contains(github.event.issue.title, '@CLAUDE')
+        )
+      )
     uses: ${{ inputs.executor_workflow_ref }}
     with:
       trigger_mode: interactive
@@ -110,8 +132,18 @@ jobs:
   claude-pr-mention:
     if: |
       github.event_name == 'pull_request' &&
-      ((contains(github.event.pull_request.title, '@claude') || contains(github.event.pull_request.title, '@Claude') || contains(github.event.pull_request.title, '@CLAUDE')) ||
-       (contains(github.event.pull_request.body, '@claude') || contains(github.event.pull_request.body, '@Claude') || contains(github.event.pull_request.body, '@CLAUDE')))
+      (
+        (
+          contains(github.event.pull_request.title, '@claude') ||
+          contains(github.event.pull_request.title, '@Claude') ||
+          contains(github.event.pull_request.title, '@CLAUDE')
+        ) ||
+        (
+          contains(github.event.pull_request.body, '@claude') ||
+          contains(github.event.pull_request.body, '@Claude') ||
+          contains(github.event.pull_request.body, '@CLAUDE')
+        )
+      )
     uses: ${{ inputs.executor_workflow_ref }}
     with:
       trigger_mode: interactive
@@ -125,8 +157,12 @@ jobs:
   claude-automatic-review:
     if: |
       github.event_name == 'pull_request' &&
-      !contains(github.event.pull_request.title, '@claude') && !contains(github.event.pull_request.title, '@Claude') && !contains(github.event.pull_request.title, '@CLAUDE') &&
-      !contains(github.event.pull_request.body, '@claude') && !contains(github.event.pull_request.body, '@Claude') && !contains(github.event.pull_request.body, '@CLAUDE')
+      !contains(github.event.pull_request.title, '@claude') &&
+      !contains(github.event.pull_request.title, '@Claude') &&
+      !contains(github.event.pull_request.title, '@CLAUDE') &&
+      !contains(github.event.pull_request.body, '@claude') &&
+      !contains(github.event.pull_request.body, '@Claude') &&
+      !contains(github.event.pull_request.body, '@CLAUDE')
     uses: ${{ inputs.executor_workflow_ref }}
     with:
       trigger_mode: automatic
