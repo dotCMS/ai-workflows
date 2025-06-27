@@ -6,7 +6,7 @@ name: PR Code Review with Claude
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: [ main, develop ]
+    branches: [main, develop]
 
 jobs:
   claude-review:
