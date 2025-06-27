@@ -1,0 +1,67 @@
+name: Test Workflows
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  yaml-lint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint YAML files
+        run: |
+          find . -name "*.yml" -o -name "*.yaml" | xargs yamllint -c .yamllint.yml
+
+  workflow-validation:
+    name: Workflow Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate GitHub Actions workflows
+        run: |
+          # Check for syntax errors in workflow files
+          for file in .github/workflows/*.yml .github/workflows/*.yaml; do
+            if [ -f "$file" ]; then
+              echo "Validating $file"
+              # Basic YAML parsing check
+              python -c "import yaml; yaml.safe_load(open('$file'))" || exit 1
+            fi
+          done
+
+      - name: Check for required workflow elements
+        run: |
+          # Ensure workflows have required elements
+          for file in .github/workflows/*.yml .github/workflows/*.yaml; do
+            if [ -f "$file" ]; then
+              echo "Checking structure of $file"
+              # Check if workflow has name, on triggers, and jobs
+              if ! grep -q "^name:" "$file"; then
+                echo "ERROR: $file missing 'name' field"
+                exit 1
+              fi
+              if ! grep -q "^on:" "$file"; then
+                echo "ERROR: $file missing 'on' field"
+                exit 1
+              fi
+              if ! grep -q "^jobs:" "$file"; then
+                echo "ERROR: $file missing 'jobs' field"
+                exit 1
+              fi
+            fi
+          done
