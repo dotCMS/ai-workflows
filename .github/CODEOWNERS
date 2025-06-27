@@ -1,0 +1,4 @@
+# Global code ownership for claude-workflows repository
+# Requires approval from core workflow developers or platform engineers for all changes
+
+* @dotCMS/core-workflow-developers @dotCMS/platform-engineers
