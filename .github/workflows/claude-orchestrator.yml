@@ -1,0 +1,169 @@
+---
+# Claude Orchestrator Workflow (Reusable)
+#
+# PURPOSE: This workflow orchestrates all Claude AI interactions by handling
+# different trigger types and routing them to the appropriate execution mode.
+# This is the reusable version that will be hosted in dotCMS/claude-workflows
+#
+# WHY: Consolidates all Claude triggers into a single workflow to prevent
+# duplicate runs while maintaining clear separation between interactive
+# and automatic modes. Designed to be reusable across different repositories.
+#
+# ROLE:
+# - Handles all trigger events (issues, comments, PR reviews, PR changes)
+# - Routes to appropriate execution mode based on trigger type
+# - Manages conditional logic to prevent duplicate workflow runs
+# - Applies configurable path exclusions
+# - Orchestrates between interactive (@claude mentions) and automatic modes
+#
+# USAGE: This is a reusable orchestrator that can be called from any repository
+# with repository-specific configurations.
+
+name: Claude Orchestrator (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      automatic_review_prompt:
+        description: 'Custom prompt for automatic PR reviews'
+        required: false
+        type: string
+        default: |
+          Please review this pull request and provide feedback on:
+          - Code quality and best practices
+          - Potential bugs or issues
+          - Performance considerations
+          - Security concerns
+          - Test coverage
+
+          Be constructive and helpful in your feedback.
+      allowed_tools:
+        description: 'Custom allowed tools configuration'
+        required: false
+        type: string
+        default: |
+          Bash(git status)
+          Bash(git diff)
+      timeout_minutes:
+        description: 'Timeout in minutes for Claude execution'
+        required: false
+        type: number
+        default: 15
+      runner:
+        description: 'GitHub runner to use'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+jobs:
+  # Interactive Claude mentions in comments
+  claude-comment-mention:
+    if: |
+      (github.event_name == 'issue_comment' && (
+        contains(github.event.comment.body, '@claude') ||
+        contains(github.event.comment.body, '@Claude') ||
+        contains(github.event.comment.body, '@CLAUDE')
+      )) ||
+      (github.event_name == 'pull_request_review_comment' && (
+        contains(github.event.comment.body, '@claude') ||
+        contains(github.event.comment.body, '@Claude') ||
+        contains(github.event.comment.body, '@CLAUDE')
+      ))
+    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
+    with:
+      trigger_mode: interactive
+      allowed_tools: ${{ inputs.allowed_tools }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+      runner: ${{ inputs.runner }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Interactive Claude mentions in PR reviews
+  claude-review-mention:
+    if: |
+      github.event_name == 'pull_request_review' && (
+        contains(github.event.review.body, '@claude') ||
+        contains(github.event.review.body, '@Claude') ||
+        contains(github.event.review.body, '@CLAUDE')
+      )
+    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
+    with:
+      trigger_mode: interactive
+      allowed_tools: ${{ inputs.allowed_tools }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+      runner: ${{ inputs.runner }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Interactive Claude mentions in issues
+  claude-issue-mention:
+    if: |
+      github.event_name == 'issues' &&
+      (
+        (
+          contains(github.event.issue.body, '@claude') ||
+          contains(github.event.issue.body, '@Claude') ||
+          contains(github.event.issue.body, '@CLAUDE')
+        ) ||
+        (
+          contains(github.event.issue.title, '@claude') ||
+          contains(github.event.issue.title, '@Claude') ||
+          contains(github.event.issue.title, '@CLAUDE')
+        )
+      )
+    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
+    with:
+      trigger_mode: interactive
+      allowed_tools: ${{ inputs.allowed_tools }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+      runner: ${{ inputs.runner }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Interactive Claude mentions in PR titles/bodies
+  claude-pr-mention:
+    if: |
+      github.event_name == 'pull_request' &&
+      (
+        (
+          contains(github.event.pull_request.title, '@claude') ||
+          contains(github.event.pull_request.title, '@Claude') ||
+          contains(github.event.pull_request.title, '@CLAUDE')
+        ) ||
+        (
+          contains(github.event.pull_request.body, '@claude') ||
+          contains(github.event.pull_request.body, '@Claude') ||
+          contains(github.event.pull_request.body, '@CLAUDE')
+        )
+      )
+    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
+    with:
+      trigger_mode: interactive
+      allowed_tools: ${{ inputs.allowed_tools }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+      runner: ${{ inputs.runner }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Automatic PR reviews (no @claude mention)
+  claude-automatic-review:
+    if: |
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.title, '@claude') &&
+      !contains(github.event.pull_request.title, '@Claude') &&
+      !contains(github.event.pull_request.title, '@CLAUDE') &&
+      !contains(github.event.pull_request.body, '@claude') &&
+      !contains(github.event.pull_request.body, '@Claude') &&
+      !contains(github.event.pull_request.body, '@CLAUDE')
+    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
+    with:
+      trigger_mode: automatic
+      direct_prompt: ${{ inputs.automatic_review_prompt }}
+      allowed_tools: ${{ inputs.allowed_tools }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+      runner: ${{ inputs.runner }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

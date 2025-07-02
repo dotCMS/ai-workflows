@@ -1,0 +1,78 @@
+name: Test Workflows
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  github-actions-lint:
+    name: Lint GitHub Actions Workflows with actionlint (docker)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Lint workflows with actionlint (docker)
+        run: |
+          docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.7
+
+  workflow-validation:
+    name: Workflow Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate GitHub Actions workflows
+        run: |
+          # Check for syntax errors in workflow files
+          for file in .github/workflows/*.yml .github/workflows/*.yaml; do
+            if [ -f "$file" ]; then
+              echo "Validating $file"
+              # Basic YAML parsing check
+              python -c "import yaml; yaml.safe_load(open('$file'))" || exit 1
+            fi
+          done
+
+      - name: Check for required workflow elements
+        run: |
+          # Ensure workflows have required elements
+          for file in .github/workflows/*.yml .github/workflows/*.yaml; do
+            if [ -f "$file" ]; then
+              echo "Checking structure of $file"
+              # Check if workflow has name, on triggers, and jobs
+              if ! grep -q "^name:" "$file"; then
+                echo "ERROR: $file missing 'name' field"
+                exit 1
+              fi
+              if ! grep -q "^on:" "$file"; then
+                echo "ERROR: $file missing 'on' field"
+                exit 1
+              fi
+              if ! grep -q "^jobs:" "$file"; then
+                echo "ERROR: $file missing 'jobs' field"
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Validate secret requirements in reusable workflows
+        run: |
+          # Check that reusable workflows properly define required secrets
+          for file in .github/workflows/*.yml .github/workflows/*.yaml; do
+            if [ -f "$file" ] && grep -q "workflow_call:" "$file"; then
+              echo "Validating reusable workflow secrets in $file"
+              # Check if workflow uses secrets but doesn't declare them
+              if grep -q "secrets\." "$file" && ! grep -q "secrets:" "$file"; then
+                echo "ERROR: $file uses secrets but doesn't declare them in workflow_call"
+                exit 1
+              fi
+              # Check for required ANTHROPIC_API_KEY if Claude CLI is used
+              if grep -q "claude\|anthropic" "$file" && ! grep -q "ANTHROPIC_API_KEY" "$file"; then
+                echo "WARNING: $file appears to use Claude but doesn't require ANTHROPIC_API_KEY secret"
+              fi
+            fi
+          done

@@ -1,0 +1,26 @@
+# Example workflow for a consumer repository
+# This file should be placed in .github/workflows/ in the consuming repository
+
+name: PR Code Review with Claude
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main, master]
+
+jobs:
+  claude-review:
+    name: Claude AI Code Review
+    uses: dotCMS/claude-workflows/.github/workflows/claude-code-review.yml@main
+    with:
+      # Optional: Specify files to review (defaults to all changed files)
+      # files_to_review: 'src/main.js,src/utils.js'
+
+      # Optional: Set review focus (general, security, performance, best-practices)
+      review_focus: 'security'
+
+      # Optional: Maximum number of files to review
+      max_files: 15
+    secrets:
+      # Pass the repository's own Anthropic API key
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
