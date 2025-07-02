@@ -7,24 +7,17 @@ on:
     branches: [main]
 
 jobs:
-  yaml-lint:
-    name: YAML Lint
+  github-actions-lint:
+    name: Lint GitHub Actions Workflows with actionlint (docker)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Install yamllint
-        run: pip install yamllint
-
-      - name: Lint YAML files
+      - name: Lint workflows with actionlint (docker)
         run: |
-          find . -name "*.yml" -o -name "*.yaml" | xargs yamllint -c .yamllint.yml
+          docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.7
 
   workflow-validation:
     name: Workflow Validation
