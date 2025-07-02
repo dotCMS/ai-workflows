@@ -1,23 +1,19 @@
 ---
-# Claude Orchestrator Workflow (Reusable)
+# Claude Orchestrator Workflow (Reusable) - DEPRECATED
 #
-# PURPOSE: This workflow orchestrates all Claude AI interactions by handling
-# different trigger types and routing them to the appropriate execution mode.
-# This is the reusable version that will be hosted in dotCMS/claude-workflows
+# ⚠️  DEPRECATED: This workflow has architectural flaws and causes double triggering.
+# ⚠️  DO NOT USE: Use claude-simple.yml instead.
+# ⚠️  MIGRATION: See ARCHITECTURE.md for migration instructions.
 #
-# WHY: Consolidates all Claude triggers into a single workflow to prevent
-# duplicate runs while maintaining clear separation between interactive
-# and automatic modes. Designed to be reusable across different repositories.
+# PROBLEM: When called via workflow_call, github.event_name becomes "workflow_call"
+# instead of the original trigger event (like "issue_comment"), causing all
+# conditional logic to fail and resulting in double triggering.
 #
-# ROLE:
-# - Handles all trigger events (issues, comments, PR reviews, PR changes)
-# - Routes to appropriate execution mode based on trigger type
-# - Manages conditional logic to prevent duplicate workflow runs
-# - Applies configurable path exclusions
-# - Orchestrates between interactive (@claude mentions) and automatic modes
+# SOLUTION: Use the consumer-handled trigger pattern with claude-simple.yml.
+# Consumer repositories handle webhook events directly and call centralized workflows.
 #
-# USAGE: This is a reusable orchestrator that can be called from any repository
-# with repository-specific configurations.
+# This file is kept for backward compatibility during migration period only.
+# It will be removed in a future version once all consumers have migrated.
 
 name: Claude Orchestrator (Reusable)
 
