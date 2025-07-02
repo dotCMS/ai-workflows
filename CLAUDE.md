@@ -141,13 +141,14 @@ See the complete examples in the `examples/` directory:
     cancel-in-progress: false
   ```
 
-## Migration from Orchestrator
+## Migration from Old Orchestrator
 
-If you're currently using the `claude-orchestrator.yml` workflow, migrate to the new pattern:
+If you're currently using the old version of `claude-orchestrator.yml` workflow that had double triggering issues, migrate to the new pattern:
 
 1. Replace the single orchestrator call with multiple jobs that handle different trigger conditions
-2. Use `claude-orchestrator.yml` instead of `claude-orchestrator.yml`
+2. Each job should call the fixed `claude-orchestrator.yml` with appropriate `trigger_mode`
 3. Add proper concurrency control to your consumer workflow
 4. Test that @claude mentions and automatic reviews work without double triggering
 
 See the example files for complete migration templates.
+

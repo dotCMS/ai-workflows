@@ -84,13 +84,6 @@ Located in this repository (`claude-workflows`):
 - Handles both interactive and automatic modes
 - Posts results back to GitHub
 
-#### 3. `claude-orchestrator.yml` (Deprecated)
-
-- **DO NOT USE** - Has architectural flaws
-- Loses original event context when called via `workflow_call`
-- Causes double triggering
-- Kept for backward compatibility only
-
 ## Key Benefits
 
 ### ✅ Reliable Event Handling
@@ -155,7 +148,6 @@ See the `examples/` directory for complete working examples:
 
 - `consumer-repo-workflow.yml` - General purpose template
 - `infrastructure-consumer-workflow.yml` - Infrastructure-specific example
-- `corrected-consumer-workflow.yml` - Shows the fix for double triggering
 
 ## Why This Architecture?
 
@@ -168,3 +160,4 @@ The original orchestrator design attempted to centralize trigger logic, but GitH
 5. Multiple jobs may trigger unexpectedly
 
 The new architecture solves this by keeping trigger logic where the event context is available (in the consumer workflow) and using centralized workflows only for execution.
+
