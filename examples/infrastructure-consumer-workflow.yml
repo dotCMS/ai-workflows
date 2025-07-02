@@ -49,7 +49,7 @@ jobs:
         contains(github.event.comment.body, '@Claude') ||
         contains(github.event.comment.body, '@CLAUDE')
       ))
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
     with:
       trigger_mode: interactive
       allowed_tools: |
@@ -74,7 +74,7 @@ jobs:
         contains(github.event.review.body, '@Claude') ||
         contains(github.event.review.body, '@CLAUDE')
       )
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
     with:
       trigger_mode: interactive
       allowed_tools: |
@@ -107,7 +107,7 @@ jobs:
           contains(github.event.issue.title, '@CLAUDE')
         )
       )
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
     with:
       trigger_mode: interactive
       allowed_tools: |
@@ -140,7 +140,7 @@ jobs:
           contains(github.event.pull_request.body, '@CLAUDE')
         )
       )
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
     with:
       trigger_mode: interactive
       allowed_tools: |
@@ -167,7 +167,7 @@ jobs:
       !contains(github.event.pull_request.body, '@claude') &&
       !contains(github.event.pull_request.body, '@Claude') &&
       !contains(github.event.pull_request.body, '@CLAUDE')
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
     with:
       trigger_mode: automatic
       direct_prompt: |

@@ -36,7 +36,7 @@ This repository provides centralized, reusable GitHub Actions workflows for Clau
 │        Claude Workflows Repo           │
 │                                         │
 │  ┌───────────────────────────────────┐  │
-│  │      claude-simple.yml            │  │
+│  │      claude-orchestrator.yml            │  │
 │  │   (Lightweight Wrapper)           │  │
 │  │                                   │  │
 │  │  • Receives trigger_mode          │  │
@@ -68,7 +68,7 @@ Located in consuming repositories (e.g., `infrastructure-as-code`, `dotcat`):
 ### Centralized Workflows
 Located in this repository (`claude-workflows`):
 
-#### 1. `claude-simple.yml` (Recommended)
+#### 1. `claude-orchestrator.yml` (Recommended)
 - Lightweight wrapper around the executor
 - Simple interface for consumer repositories
 - Reliable and predictable behavior
@@ -129,7 +129,7 @@ jobs:
     if: |
       github.event_name == 'issue_comment' && 
       contains(github.event.comment.body, '@claude')
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
     with:
       trigger_mode: interactive
       allowed_tools: "Bash(git status)"
