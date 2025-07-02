@@ -19,7 +19,7 @@ Location: `claude-executor-reusable.yml` (rename to `claude-executor.yml`)
 Location: `claude-orchestrator-reusable.yml` (rename to `claude-orchestrator.yml`)
 - Reusable workflow that orchestrates Claude interactions
 - Handles all trigger events (comments, PRs, issues)
-- Configurable prompts, tools, and executor workflow reference
+- Configurable prompts, tools, and **statically calls the executor workflow**
 
 ## Migration Benefits
 

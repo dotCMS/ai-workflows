@@ -96,7 +96,7 @@ flowchart TD
 ## Available Workflows
 
 ### Claude Orchestrator (`claude-orchestrator.yml`)
-Routes all Claude triggers (PRs, issues, comments, reviews) to the correct execution mode and calls the executor workflow.
+Routes all Claude triggers (PRs, issues, comments, reviews) to the correct execution mode and statically calls the executor workflow.
 
 ### Claude Executor (`claude-executor.yml`)
 Handles the actual execution of Claude actions, with configurable parameters (prompts, allowed tools, runner, etc.).

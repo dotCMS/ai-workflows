@@ -11,7 +11,7 @@ This repository provides centralized, reusable GitHub Actions workflows for Clau
 The repository implements a two-workflow architecture:
 
 ### Core Workflows
-- **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): Routes different trigger types (PR events, comments, issues) to appropriate execution modes. Handles both interactive (@claude mentions) and automatic review modes.
+- **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): Routes different trigger types (PR events, comments, issues) to appropriate execution modes. Handles both interactive (@claude mentions) and automatic review modes. **Statically calls the executor workflow.**
 - **Claude Executor** (`.github/workflows/claude-executor.yml`): The execution engine that runs Claude AI actions with configurable tools, timeouts, and runners.
 
 ### Key Design Patterns
