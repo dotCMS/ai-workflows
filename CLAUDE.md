@@ -11,10 +11,12 @@ This repository provides centralized, reusable GitHub Actions workflows for Clau
 The repository implements a simple, reliable architecture:
 
 ### Core Workflows
+
 - **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): A lightweight wrapper that calls the executor with minimal configuration. This is the recommended workflow for consumer repositories (FIXED - no longer has the original architectural issues).
 - **Claude Executor** (`.github/workflows/claude-executor.yml`): The execution engine that runs Claude AI actions with configurable tools, timeouts, and runners.
 
 ### Key Design Patterns
+
 - **Consumer-Handled Triggers**: Consumer repositories handle their own webhook triggers and conditional logic, then call the centralized workflows
 - **Simple Reusable Workflows**: The `claude-orchestrator.yml` workflow provides a clean interface to the executor
 - **Parameterization**: Workflows accept inputs for customization (prompts, tools, timeouts, runners)
@@ -23,6 +25,7 @@ The repository implements a simple, reliable architecture:
 ## Common Commands
 
 ### Testing and Validation
+
 ```bash
 # Lint YAML files
 yamllint -c .yamllint.yml **/*.yml **/*.yaml
@@ -33,7 +36,9 @@ python -c "import yaml; yaml.safe_load(open('.github/workflows/claude-executor.y
 ```
 
 ### Workflow Testing
+
 The repository includes automated tests in `.github/workflows/tests.yml` that:
+
 - Lint all YAML files using yamllint configuration
 - Validate GitHub Actions workflow syntax
 - Check for required workflow elements (name, on, jobs)
@@ -51,6 +56,7 @@ The repository includes automated tests in `.github/workflows/tests.yml` that:
 The recommended approach is for consumer repositories to handle their own webhook triggers and conditional logic, then call the centralized `claude-orchestrator.yml` workflow. This approach is reliable and avoids the architectural issues with the orchestrator pattern.
 
 **Example for interactive @claude mentions:**
+
 ```yaml
 jobs:
   claude-comment-mention:
@@ -72,6 +78,7 @@ jobs:
 ```
 
 **Example for automatic PR reviews:**
+
 ```yaml
   claude-automatic-review:
     if: |
@@ -94,12 +101,14 @@ jobs:
 The original orchestrator design had a fundamental flaw: when called via `workflow_call`, the `github.event_name` becomes `"workflow_call"` instead of the original trigger event (like `"issue_comment"`), causing all conditional logic to fail and resulting in double triggering.
 
 The consumer-handled approach solves this by:
+
 1. Consumer workflows handle their own webhook events directly
 2. They evaluate trigger conditions using the original event context
 3. They call the simple centralized workflow only when conditions are met
 4. No double triggering occurs
 
 See the complete examples in the `examples/` directory:
+
 - `examples/consumer-repo-workflow.yml` - General purpose example
 - `examples/infrastructure-consumer-workflow.yml` - Infrastructure-specific example
 
@@ -125,6 +134,7 @@ See the complete examples in the `examples/` directory:
 - **Runner**: ubuntu-latest  
 - **Default Tools**: `git status` and `git diff`
 - **Concurrency**: Consumer repositories should implement concurrency control:
+
   ```yaml
   concurrency:
     group: claude-${{ github.event.pull_request.number || github.event.issue.number || 'manual' }}
