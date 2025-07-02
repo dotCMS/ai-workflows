@@ -1,7 +1,15 @@
-# Example workflow for a consumer repository
-# This file should be placed in .github/workflows/ in the consuming repository
+---
+# Remote AI Checks Workflow (Infrastructure-as-Code)
+#
+# PURPOSE: This workflow provides AI-powered code reviews and checks
+# for infrastructure-as-code changes by handling trigger events locally
+# and calling the claude-executor directly when appropriate.
+#
+# FIXED: The original orchestrator design doesn't work with workflow_call
+# because github.event_name becomes 'workflow_call' instead of the original
+# trigger event. This version handles the trigger logic locally.
 
-name: Claude AI Integration
+name: Remote AI Checks
 
 # Concurrency control to prevent multiple jobs running for the same PR/issue
 concurrency:
@@ -26,7 +34,12 @@ on:
     types: [submitted]
   pull_request:
     types: [opened, synchronize]
-    branches: [main, master]
+    # Ignore changes to customer-specific Kubernetes manifests and configs
+    paths-ignore:
+      - "kubernetes/customers/**/*.yml"
+      - "kubernetes/customers/**/*.yaml"
+      - "kubernetes/customers/**/*.json"     # Customer config files
+      - "kubernetes/customers/**/*.md"       # Customer documentation
 
 jobs:
   # Interactive Claude mentions in comments
@@ -42,13 +55,18 @@ jobs:
         contains(github.event.comment.body, '@Claude') ||
         contains(github.event.comment.body, '@CLAUDE')
       ))
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
     with:
       trigger_mode: interactive
       allowed_tools: |
+        Bash(terraform validate)
+        Bash(terraform plan)
+        Bash(terraform fmt)
+        Bash(terragrunt validate)
+        Bash(terragrunt plan)
+        Bash(terragrunt hclfmt)
         Bash(git status)
         Bash(git diff)
-        # Add your project-specific tools here
       timeout_minutes: 15
       runner: ubuntu-latest
     secrets:
@@ -62,13 +80,18 @@ jobs:
         contains(github.event.review.body, '@Claude') ||
         contains(github.event.review.body, '@CLAUDE')
       )
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
     with:
       trigger_mode: interactive
       allowed_tools: |
+        Bash(terraform validate)
+        Bash(terraform plan)
+        Bash(terraform fmt)
+        Bash(terragrunt validate)
+        Bash(terragrunt plan)
+        Bash(terragrunt hclfmt)
         Bash(git status)
         Bash(git diff)
-        # Add your project-specific tools here
       timeout_minutes: 15
       runner: ubuntu-latest
     secrets:
@@ -90,13 +113,18 @@ jobs:
           contains(github.event.issue.title, '@CLAUDE')
         )
       )
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
     with:
       trigger_mode: interactive
       allowed_tools: |
+        Bash(terraform validate)
+        Bash(terraform plan)
+        Bash(terraform fmt)
+        Bash(terragrunt validate)
+        Bash(terragrunt plan)
+        Bash(terragrunt hclfmt)
         Bash(git status)
         Bash(git diff)
-        # Add your project-specific tools here
       timeout_minutes: 15
       runner: ubuntu-latest
     secrets:
@@ -118,13 +146,18 @@ jobs:
           contains(github.event.pull_request.body, '@CLAUDE')
         )
       )
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
     with:
       trigger_mode: interactive
       allowed_tools: |
+        Bash(terraform validate)
+        Bash(terraform plan)
+        Bash(terraform fmt)
+        Bash(terragrunt validate)
+        Bash(terragrunt plan)
+        Bash(terragrunt hclfmt)
         Bash(git status)
         Bash(git diff)
-        # Add your project-specific tools here
       timeout_minutes: 15
       runner: ubuntu-latest
     secrets:
@@ -140,7 +173,7 @@ jobs:
       !contains(github.event.pull_request.body, '@claude') &&
       !contains(github.event.pull_request.body, '@Claude') &&
       !contains(github.event.pull_request.body, '@CLAUDE')
-    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
     with:
       trigger_mode: automatic
       direct_prompt: |
@@ -150,12 +183,18 @@ jobs:
         - Performance considerations
         - Security concerns
         - Test coverage
+        - Estimated cost spend or savings of the changes
 
         Be constructive and helpful in your feedback.
       allowed_tools: |
+        Bash(terraform validate)
+        Bash(terraform plan)
+        Bash(terraform fmt)
+        Bash(terragrunt validate)
+        Bash(terragrunt plan)
+        Bash(terragrunt hclfmt)
         Bash(git status)
         Bash(git diff)
-        # Add your project-specific tools here
       timeout_minutes: 15
       runner: ubuntu-latest
     secrets:

@@ -8,15 +8,16 @@ This repository provides centralized, reusable GitHub Actions workflows for Clau
 
 ## Architecture Overview
 
-The repository implements a two-workflow architecture:
+The repository implements a simple, reliable architecture:
 
 ### Core Workflows
-- **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): Routes different trigger types (PR events, comments, issues) to appropriate execution modes. Handles both interactive (@claude mentions) and automatic review modes. **Statically calls the executor workflow.**
+- **Claude Simple** (`.github/workflows/claude-simple.yml`): A lightweight wrapper that calls the executor with minimal configuration. This is the recommended workflow for consumer repositories.
 - **Claude Executor** (`.github/workflows/claude-executor.yml`): The execution engine that runs Claude AI actions with configurable tools, timeouts, and runners.
+- **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): **DEPRECATED** - Has architectural flaws when used as a reusable workflow. Use `claude-simple.yml` instead.
 
 ### Key Design Patterns
-- **Reusable Workflows**: Both workflows use `workflow_call` to be consumed by other repositories
-- **Conditional Execution**: Orchestrator prevents duplicate runs by routing triggers to specific jobs
+- **Consumer-Handled Triggers**: Consumer repositories handle their own webhook triggers and conditional logic, then call the centralized workflows
+- **Simple Reusable Workflows**: The `claude-simple.yml` workflow provides a clean interface to the executor
 - **Parameterization**: Workflows accept inputs for customization (prompts, tools, timeouts, runners)
 - **Security Isolation**: Each consuming repository must provide its own `ANTHROPIC_API_KEY` for cost tracking and security
 
@@ -46,22 +47,62 @@ The repository includes automated tests in `.github/workflows/tests.yml` that:
 
 ## Usage by Consuming Repositories
 
-Repositories use this workflow by creating a workflow file that calls the orchestrator:
+### Recommended Approach: Consumer-Handled Triggers
 
+The recommended approach is for consumer repositories to handle their own webhook triggers and conditional logic, then call the centralized `claude-simple.yml` workflow. This approach is reliable and avoids the architectural issues with the orchestrator pattern.
+
+**Example for interactive @claude mentions:**
 ```yaml
 jobs:
-  claude:
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+  claude-comment-mention:
+    if: |
+      github.event_name == 'issue_comment' && (
+        contains(github.event.comment.body, '@claude') ||
+        contains(github.event.comment.body, '@Claude') ||
+        contains(github.event.comment.body, '@CLAUDE')
+      )
+    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
     with:
-      # Repository-specific configurations
+      trigger_mode: interactive
       allowed_tools: |
         Bash(terraform plan)
         Bash(git status)
-      automatic_review_prompt: |
-        Custom review prompt for this repository
+      timeout_minutes: 15
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
+
+**Example for automatic PR reviews:**
+```yaml
+  claude-automatic-review:
+    if: |
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.title, '@claude')
+    uses: dotCMS/claude-workflows/.github/workflows/claude-simple.yml@main
+    with:
+      trigger_mode: automatic
+      direct_prompt: |
+        Please review this pull request and provide feedback...
+      allowed_tools: |
+        Bash(terraform plan)
+        Bash(git status)
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+### Why This Approach?
+
+The original orchestrator design had a fundamental flaw: when called via `workflow_call`, the `github.event_name` becomes `"workflow_call"` instead of the original trigger event (like `"issue_comment"`), causing all conditional logic to fail and resulting in double triggering.
+
+The consumer-handled approach solves this by:
+1. Consumer workflows handle their own webhook events directly
+2. They evaluate trigger conditions using the original event context
+3. They call the simple centralized workflow only when conditions are met
+4. No double triggering occurs
+
+See the complete examples in the `examples/` directory:
+- `examples/consumer-repo-workflow.yml` - General purpose example
+- `examples/infrastructure-consumer-workflow.yml` - Infrastructure-specific example
 
 ## Security Requirements
 
@@ -84,4 +125,20 @@ jobs:
 - **Timeout**: 15 minutes
 - **Runner**: ubuntu-latest  
 - **Default Tools**: `git status` and `git diff`
-- **Concurrency**: Prevents multiple Claude jobs per PR/issue
+- **Concurrency**: Consumer repositories should implement concurrency control:
+  ```yaml
+  concurrency:
+    group: claude-${{ github.event.pull_request.number || github.event.issue.number || 'manual' }}
+    cancel-in-progress: false
+  ```
+
+## Migration from Orchestrator
+
+If you're currently using the `claude-orchestrator.yml` workflow, migrate to the new pattern:
+
+1. Replace the single orchestrator call with multiple jobs that handle different trigger conditions
+2. Use `claude-simple.yml` instead of `claude-orchestrator.yml`
+3. Add proper concurrency control to your consumer workflow
+4. Test that @claude mentions and automatic reviews work without double triggering
+
+See the example files for complete migration templates.
