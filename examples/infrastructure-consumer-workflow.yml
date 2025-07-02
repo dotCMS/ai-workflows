@@ -1,7 +1,9 @@
-# Example workflow for a consumer repository
-# This file should be placed in .github/workflows/ in the consuming repository
+---
+# Infrastructure-as-Code Consumer Workflow Example
+# This example shows how to configure Claude workflows for infrastructure repositories
+# with Terraform, Terragrunt, and Kubernetes-specific tooling.
 
-name: Claude AI Integration
+name: Infrastructure AI Checks
 
 # Concurrency control to prevent multiple jobs running for the same PR/issue
 concurrency:
@@ -26,7 +28,12 @@ on:
     types: [submitted]
   pull_request:
     types: [opened, synchronize]
-    branches: [main, master]
+    # Ignore changes to customer-specific configurations
+    paths-ignore:
+      - "kubernetes/customers/**/*.yml"
+      - "kubernetes/customers/**/*.yaml"
+      - "kubernetes/customers/**/*.json"
+      - "kubernetes/customers/**/*.md"
 
 jobs:
   # Interactive Claude mentions in comments
@@ -46,9 +53,14 @@ jobs:
     with:
       trigger_mode: interactive
       allowed_tools: |
+        Bash(terraform validate)
+        Bash(terraform plan)
+        Bash(terraform fmt)
+        Bash(terragrunt validate)
+        Bash(terragrunt plan)
+        Bash(terragrunt hclfmt)
         Bash(git status)
         Bash(git diff)
-        # Add your project-specific tools here
       timeout_minutes: 15
       runner: ubuntu-latest
     secrets:
@@ -66,9 +78,14 @@ jobs:
     with:
       trigger_mode: interactive
       allowed_tools: |
+        Bash(terraform validate)
+        Bash(terraform plan)
+        Bash(terraform fmt)
+        Bash(terragrunt validate)
+        Bash(terragrunt plan)
+        Bash(terragrunt hclfmt)
         Bash(git status)
         Bash(git diff)
-        # Add your project-specific tools here
       timeout_minutes: 15
       runner: ubuntu-latest
     secrets:
@@ -94,9 +111,14 @@ jobs:
     with:
       trigger_mode: interactive
       allowed_tools: |
+        Bash(terraform validate)
+        Bash(terraform plan)
+        Bash(terraform fmt)
+        Bash(terragrunt validate)
+        Bash(terragrunt plan)
+        Bash(terragrunt hclfmt)
         Bash(git status)
         Bash(git diff)
-        # Add your project-specific tools here
       timeout_minutes: 15
       runner: ubuntu-latest
     secrets:
@@ -122,9 +144,14 @@ jobs:
     with:
       trigger_mode: interactive
       allowed_tools: |
+        Bash(terraform validate)
+        Bash(terraform plan)
+        Bash(terraform fmt)
+        Bash(terragrunt validate)
+        Bash(terragrunt plan)
+        Bash(terragrunt hclfmt)
         Bash(git status)
         Bash(git diff)
-        # Add your project-specific tools here
       timeout_minutes: 15
       runner: ubuntu-latest
     secrets:
@@ -144,18 +171,27 @@ jobs:
     with:
       trigger_mode: automatic
       direct_prompt: |
-        Please review this pull request and provide feedback on:
+        Please review this infrastructure-as-code pull request and provide feedback on:
         - Code quality and best practices
         - Potential bugs or issues
         - Performance considerations
         - Security concerns
         - Test coverage
+        - Estimated cost spend or savings of the changes
+        - Terraform/Terragrunt best practices
+        - Resource naming conventions
+        - Infrastructure security implications
 
         Be constructive and helpful in your feedback.
       allowed_tools: |
+        Bash(terraform validate)
+        Bash(terraform plan)
+        Bash(terraform fmt)
+        Bash(terragrunt validate)
+        Bash(terragrunt plan)
+        Bash(terragrunt hclfmt)
         Bash(git status)
         Bash(git diff)
-        # Add your project-specific tools here
       timeout_minutes: 15
       runner: ubuntu-latest
     secrets:
