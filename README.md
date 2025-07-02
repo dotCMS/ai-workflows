@@ -52,6 +52,28 @@ For a comprehensive migration guide—including step-by-step instructions, valid
 
 ---
 
+## 🗺️ Workflow Visualization
+
+```mermaid
+flowchart TD
+    A["GitHub Event (PR, Issue, Comment, Review)"] --> B["Orchestrator Workflow (claude-orchestrator.yml)"]
+    B -->|"Determines trigger type and mode"| C["Executor Workflow (claude-executor.yml)"]
+    C --> D["Claude AI Action (Review, Comment, etc.)"]
+
+    subgraph "Repo Level"
+      A
+    end
+    subgraph "Centralized Workflows"
+      B
+      C
+    end
+    
+    B -.->|"Custom inputs: prompts, tools, runner"| C
+    C -.->|"Repo-specific config from orchestrator"| D
+```
+
+---
+
 ## Important: Security and Cost Management
 
 **⚠️ API Key Requirement**: All workflows in this repository require each consuming repository to provide its own Anthropic API key. This is a mandatory security and cost management requirement.
