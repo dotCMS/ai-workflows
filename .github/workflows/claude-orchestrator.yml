@@ -51,7 +51,7 @@ on:
 
 jobs:
   claude-execution:
-    uses: dotCMS/claude-workflows/.github/workflows/claude-executor.yml@main
+    uses: ./.github/workflows/claude-executor.yml
     with:
       trigger_mode: ${{ inputs.trigger_mode }}
       direct_prompt: ${{ inputs.direct_prompt }}
