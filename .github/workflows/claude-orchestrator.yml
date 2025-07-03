@@ -50,7 +50,7 @@ on:
         required: false
         type: boolean
         default: true
-      custom_condition:
+      custom_trigger_condition:
         description: 'Custom condition to override default mention detection (optional)'
         required: false
         type: string
@@ -62,7 +62,7 @@ jobs:
   claude-execution:
     # Only run if custom condition is provided OR default mention detection is enabled and mentions are found
     if: |
-      inputs.custom_condition != '' || (
+      inputs.custom_trigger_condition != '' || (
         inputs.enable_mention_detection == true && inputs.trigger_mode == 'interactive' && (
           (github.event_name == 'issue_comment' && (
             contains(github.event.comment.body, '@claude') ||
