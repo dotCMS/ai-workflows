@@ -1,5 +1,5 @@
 ---
-# Claude Orchestrator Workflow (Reusable) - FIXED
+# Claude Orchestrator Workflow (Reusable) 
 #
 # PURPOSE: This workflow orchestrates Claude AI interactions by providing
 # a simple, reliable interface to the claude-executor. Consumer repositories
@@ -45,12 +45,58 @@ on:
         required: false
         type: string
         default: 'ubuntu-latest'
+      enable_mention_detection:
+        description: 'Enable automatic @claude mention detection for interactive mode'
+        required: false
+        type: boolean
+        default: true
+      custom_trigger_condition:
+        description: 'Custom condition to override default mention detection (optional)'
+        required: false
+        type: string
     secrets:
       ANTHROPIC_API_KEY:
         required: true
 
 jobs:
   claude-execution:
+    # Only run if custom condition is provided OR default mention detection is enabled and mentions are found
+    if: |
+      inputs.custom_trigger_condition != '' || (
+        inputs.enable_mention_detection == true && inputs.trigger_mode == 'interactive' && (
+          (github.event_name == 'issue_comment' && (
+            contains(github.event.comment.body, '@claude') ||
+            contains(github.event.comment.body, '@Claude') ||
+            contains(github.event.comment.body, '@CLAUDE')
+          )) ||
+          (github.event_name == 'pull_request_review_comment' && (
+            contains(github.event.comment.body, '@claude') ||
+            contains(github.event.comment.body, '@Claude') ||
+            contains(github.event.comment.body, '@CLAUDE')
+          )) ||
+          (github.event_name == 'pull_request_review' && (
+            contains(github.event.review.body, '@claude') ||
+            contains(github.event.review.body, '@Claude') ||
+            contains(github.event.review.body, '@CLAUDE')
+          )) ||
+          (github.event_name == 'issues' && (
+            contains(github.event.issue.body, '@claude') ||
+            contains(github.event.issue.body, '@Claude') ||
+            contains(github.event.issue.body, '@CLAUDE') ||
+            contains(github.event.issue.title, '@claude') ||
+            contains(github.event.issue.title, '@Claude') ||
+            contains(github.event.issue.title, '@CLAUDE')
+          )) ||
+          (github.event_name == 'pull_request' && (
+            contains(github.event.pull_request.title, '@claude') ||
+            contains(github.event.pull_request.title, '@Claude') ||
+            contains(github.event.pull_request.title, '@CLAUDE') ||
+            contains(github.event.pull_request.body, '@claude') ||
+            contains(github.event.pull_request.body, '@Claude') ||
+            contains(github.event.pull_request.body, '@CLAUDE')
+          ))
+        )
+      ) || inputs.trigger_mode == 'automatic'
     uses: ./.github/workflows/claude-executor.yml
     with:
       trigger_mode: ${{ inputs.trigger_mode }}
