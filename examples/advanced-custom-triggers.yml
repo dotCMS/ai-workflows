@@ -1,0 +1,129 @@
+# Advanced Custom Trigger Conditions Example
+# This example demonstrates using custom_trigger_condition for advanced use cases
+# beyond the default @claude mention detection.
+
+name: Advanced Claude Integration with Custom Triggers
+
+# Concurrency control to prevent multiple jobs running for the same PR/issue
+concurrency:
+  group: claude-${{ github.event.pull_request.number || github.event.issue.number || 'manual' }}
+  cancel-in-progress: false
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: 'Test mode for debugging'
+        required: false
+        type: boolean
+        default: false
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  # Example 1: Custom trigger for urgent issues only
+  claude-urgent-issues:
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    with:
+      trigger_mode: interactive
+      # Custom condition: Only trigger for issues labeled as "urgent" or "critical"
+      custom_trigger_condition: |
+        github.event_name == 'issues' && (
+          contains(github.event.issue.labels.*.name, 'urgent') ||
+          contains(github.event.issue.labels.*.name, 'critical') ||
+          contains(github.event.issue.labels.*.name, 'P0')
+        )
+      allowed_tools: |
+        Bash(git status)
+        Bash(git diff)
+      timeout_minutes: 10
+      runner: ubuntu-latest
+      enable_mention_detection: false  # Disable default @claude detection since we have custom logic
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Example 2: Custom trigger for specific file changes
+  claude-config-changes:
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    with:
+      trigger_mode: automatic
+      # Custom condition: Only trigger for PRs that modify configuration files
+      custom_trigger_condition: |
+        github.event_name == 'pull_request' && (
+          contains(github.event.pull_request.title, '[config]') ||
+          contains(github.event.pull_request.body, 'configuration') ||
+          github.event.pull_request.changed_files > 10
+        )
+      direct_prompt: |
+        This PR appears to modify configuration files or has many changes. 
+        Please review for:
+        - Configuration syntax and validity
+        - Potential breaking changes
+        - Security implications of config changes
+        - Impact on existing functionality
+      allowed_tools: |
+        Bash(git status)
+        Bash(git diff)
+        Bash(grep -r "config" .)
+      timeout_minutes: 15
+      runner: ubuntu-latest
+      enable_mention_detection: false
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Example 3: Custom trigger combining multiple conditions
+  claude-security-review:
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    with:
+      trigger_mode: automatic
+      # Custom condition: Security-related changes or mentions
+      custom_trigger_condition: |
+        (github.event_name == 'pull_request' && (
+          contains(github.event.pull_request.title, 'security') ||
+          contains(github.event.pull_request.title, 'auth') ||
+          contains(github.event.pull_request.body, 'vulnerability') ||
+          contains(github.event.pull_request.body, 'CVE-')
+        )) ||
+        (github.event_name == 'issue_comment' && (
+          contains(github.event.comment.body, 'security review') ||
+          contains(github.event.comment.body, '@security-team')
+        ))
+      direct_prompt: |
+        This appears to be a security-related change. Please provide a thorough security review focusing on:
+        - Authentication and authorization mechanisms
+        - Input validation and sanitization
+        - Potential security vulnerabilities
+        - Compliance with security best practices
+        - Impact on existing security controls
+      allowed_tools: |
+        Bash(git status)
+        Bash(git diff)
+        Bash(grep -r "password\|token\|secret\|key" . --exclude-dir=.git)
+      timeout_minutes: 20
+      runner: ubuntu-latest
+      enable_mention_detection: false
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Example 4: Fallback with default @claude mention detection
+  claude-general:
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    with:
+      trigger_mode: interactive
+      # No custom condition - will use default @claude mention detection
+      allowed_tools: |
+        Bash(git status)
+        Bash(git diff)
+      timeout_minutes: 15
+      runner: ubuntu-latest
+      enable_mention_detection: true  # Use default @claude mention detection
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

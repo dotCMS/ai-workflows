@@ -23,12 +23,14 @@ If you previously used the pilot Claude workflow in `dotcms/infrastructure-as-co
      claude:
        uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
        with:
+         trigger_mode: automatic  # or 'interactive' for @claude mentions
          # Customize as needed for your repo
          allowed_tools: |
            Bash(terraform plan)
            Bash(git status)
-         automatic_review_prompt: |
+         direct_prompt: |
            Please review this pull request for code quality, security, and best practices.
+         enable_mention_detection: true  # Enable @claude mention detection
        secrets:
          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
    ```
@@ -96,7 +98,7 @@ flowchart TD
 ## Available Workflows
 
 ### Claude Orchestrator (`claude-orchestrator.yml`)
-Routes all Claude triggers (PRs, issues, comments, reviews) to the correct execution mode and statically calls the executor workflow.
+Routes all Claude triggers (PRs, issues, comments, reviews) to the correct execution mode. Features built-in @claude mention detection and support for custom trigger conditions.
 
 ### Claude Executor (`claude-executor.yml`)
 Handles the actual execution of Claude actions, with configurable parameters (prompts, allowed tools, runner, etc.).
@@ -117,24 +119,45 @@ Each consuming repository must configure its own Anthropic API key:
 Create a workflow file in your repository at `.github/workflows/claude-review.yml` (or similar):
 
 ```yaml
-name: PR Code Review with Claude
+name: Claude AI Integration
 
 on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]  
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
   pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [ main, develop ]
+    types: [opened, synchronize]
 
 jobs:
-  claude:
+  # Interactive Claude mentions using built-in detection
+  claude-interactive:
     uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
     with:
-      # Optional: Customize allowed tools
+      trigger_mode: interactive
       allowed_tools: |
-        Bash(terraform plan)
         Bash(git status)
-      # Optional: Customize review prompt
-      automatic_review_prompt: |
+        Bash(git diff)
+      enable_mention_detection: true  # Uses built-in @claude detection
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # Automatic PR reviews (no @claude mention required)
+  claude-automatic:
+    if: github.event_name == 'pull_request'
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    with:
+      trigger_mode: automatic
+      direct_prompt: |
         Please review this pull request for code quality, security, and best practices.
+      allowed_tools: |
+        Bash(git status)
+        Bash(git diff)
+      enable_mention_detection: false  # No mention detection for automatic reviews
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
@@ -143,13 +166,74 @@ jobs:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `automatic_review_prompt` | Custom prompt for automatic PR reviews | No | See orchestrator default |
-| `allowed_tools` | Custom allowed tools configuration | No | See orchestrator default |
+| `trigger_mode` | Mode: `interactive` or `automatic` | **Yes** | - |
+| `direct_prompt` | Custom prompt for automatic mode | No | - |
+| `allowed_tools` | Custom allowed tools configuration | No | `Bash(git status)`<br>`Bash(git diff)` |
 | `timeout_minutes` | Timeout for Claude execution | No | 15 |
 | `runner` | GitHub runner to use | No | ubuntu-latest |
+| `enable_mention_detection` | Enable built-in @claude mention detection | No | true |
+| `custom_trigger_condition` | Custom condition to override default detection | No | - |
+
+### 4. Advanced: Custom Trigger Conditions
+
+For advanced use cases beyond @claude mentions, use `custom_trigger_condition`:
+
+```yaml
+jobs:
+  claude-security-review:
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    with:
+      trigger_mode: automatic
+      custom_trigger_condition: |
+        github.event_name == 'pull_request' && (
+          contains(github.event.pull_request.title, 'security') ||
+          contains(github.event.pull_request.body, 'vulnerability')
+        )
+      direct_prompt: |
+        This appears to be a security-related change. Please review for security implications.
+      enable_mention_detection: false  # Disable default detection when using custom condition
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+**Note**: When using `custom_trigger_condition`, set `enable_mention_detection: false` to avoid conflicts.
 
 ---
 
 ## Examples
 
-See the `examples/` directory for complete workflow examples.
+See the `examples/` directory for complete workflow examples:
+
+- **`consumer-repo-workflow.yml`** - Basic usage with @claude mentions
+- **`infrastructure-consumer-workflow.yml`** - Infrastructure-specific tooling  
+- **`advanced-custom-triggers.yml`** - Advanced examples using `custom_trigger_condition` for specialized triggers (urgent issues, security reviews, config changes, etc.)
+
+### Quick Examples
+
+**Basic @claude mention detection:**
+```yaml
+uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+with:
+  trigger_mode: interactive
+  enable_mention_detection: true
+```
+
+**Automatic PR reviews:**
+```yaml
+uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+with:
+  trigger_mode: automatic
+  direct_prompt: "Review this PR for quality and security."
+  enable_mention_detection: false
+```
+
+**Custom triggers for urgent issues:**
+```yaml
+uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+with:
+  trigger_mode: interactive
+  custom_trigger_condition: |
+    github.event_name == 'issues' && 
+    contains(github.event.issue.labels.*.name, 'urgent')
+  enable_mention_detection: false
+```

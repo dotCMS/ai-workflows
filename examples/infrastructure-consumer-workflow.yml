@@ -36,19 +36,8 @@ on:
       - "kubernetes/customers/**/*.md"
 
 jobs:
-  # Interactive Claude mentions in comments
-  claude-comment-mention:
-    if: |
-      (github.event_name == 'issue_comment' && (
-        contains(github.event.comment.body, '@claude') ||
-        contains(github.event.comment.body, '@Claude') ||
-        contains(github.event.comment.body, '@CLAUDE')
-      )) ||
-      (github.event_name == 'pull_request_review_comment' && (
-        contains(github.event.comment.body, '@claude') ||
-        contains(github.event.comment.body, '@Claude') ||
-        contains(github.event.comment.body, '@CLAUDE')
-      ))
+  # Interactive Claude mentions (simplified using centralized logic)
+  claude-interactive:
     uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
     with:
       trigger_mode: interactive
@@ -63,97 +52,9 @@ jobs:
         Bash(git diff)
       timeout_minutes: 15
       runner: ubuntu-latest
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
-  # Interactive Claude mentions in PR reviews
-  claude-review-mention:
-    if: |
-      github.event_name == 'pull_request_review' && (
-        contains(github.event.review.body, '@claude') ||
-        contains(github.event.review.body, '@Claude') ||
-        contains(github.event.review.body, '@CLAUDE')
-      )
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
-    with:
-      trigger_mode: interactive
-      allowed_tools: |
-        Bash(terraform validate)
-        Bash(terraform plan)
-        Bash(terraform fmt)
-        Bash(terragrunt validate)
-        Bash(terragrunt plan)
-        Bash(terragrunt hclfmt)
-        Bash(git status)
-        Bash(git diff)
-      timeout_minutes: 15
-      runner: ubuntu-latest
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
-  # Interactive Claude mentions in issues
-  claude-issue-mention:
-    if: |
-      github.event_name == 'issues' &&
-      (
-        (
-          contains(github.event.issue.body, '@claude') ||
-          contains(github.event.issue.body, '@Claude') ||
-          contains(github.event.issue.body, '@CLAUDE')
-        ) ||
-        (
-          contains(github.event.issue.title, '@claude') ||
-          contains(github.event.issue.title, '@Claude') ||
-          contains(github.event.issue.title, '@CLAUDE')
-        )
-      )
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
-    with:
-      trigger_mode: interactive
-      allowed_tools: |
-        Bash(terraform validate)
-        Bash(terraform plan)
-        Bash(terraform fmt)
-        Bash(terragrunt validate)
-        Bash(terragrunt plan)
-        Bash(terragrunt hclfmt)
-        Bash(git status)
-        Bash(git diff)
-      timeout_minutes: 15
-      runner: ubuntu-latest
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
-  # Interactive Claude mentions in PR titles/bodies
-  claude-pr-mention:
-    if: |
-      github.event_name == 'pull_request' &&
-      (
-        (
-          contains(github.event.pull_request.title, '@claude') ||
-          contains(github.event.pull_request.title, '@Claude') ||
-          contains(github.event.pull_request.title, '@CLAUDE')
-        ) ||
-        (
-          contains(github.event.pull_request.body, '@claude') ||
-          contains(github.event.pull_request.body, '@Claude') ||
-          contains(github.event.pull_request.body, '@CLAUDE')
-        )
-      )
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
-    with:
-      trigger_mode: interactive
-      allowed_tools: |
-        Bash(terraform validate)
-        Bash(terraform plan)
-        Bash(terraform fmt)
-        Bash(terragrunt validate)
-        Bash(terragrunt plan)
-        Bash(terragrunt hclfmt)
-        Bash(git status)
-        Bash(git diff)
-      timeout_minutes: 15
-      runner: ubuntu-latest
+      enable_mention_detection: true  # Uses built-in @claude mention detection
+      # custom_trigger_condition: |    # Optional: Custom trigger logic
+      #   github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'infrastructure')
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
@@ -194,5 +95,8 @@ jobs:
         Bash(git diff)
       timeout_minutes: 15
       runner: ubuntu-latest
+      enable_mention_detection: false  # No mention detection for automatic reviews
+      # custom_trigger_condition: |     # Optional: Custom logic for infrastructure changes
+      #   github.event_name == 'pull_request' && contains(github.event.pull_request.body, 'terraform')
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
