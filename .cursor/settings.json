@@ -1,0 +1,33 @@
+{
+  "rules": {
+    "terminal-commands": "Follow zsh escaping best practices and use file-based approaches for complex content",
+    "git-workflow": "Use version tags for production stability and follow safe command patterns",
+    "release-process": "Follow the release checklist and use semantic versioning",
+    "error-prevention": "Test simple commands first and have recovery procedures ready",
+    "development-patterns": "Maintain code quality, security, and collaboration standards",
+    "thoughtful-execution": "Always present plans first, think deeply, ask clarifying questions, and remember slow is smooth"
+  },
+  "formatOnSave": true,
+  "defaultFormatter": "prettier",
+  "terminal": {
+    "shell": "/bin/zsh",
+    "cwd": "${workspaceFolder}"
+  },
+  "files": {
+    "exclude": {
+      "**/node_modules": true,
+      "**/.git": true,
+      "**/dist": true,
+      "**/build": true,
+      "**/*.log": true
+    }
+  },
+  "search": {
+    "exclude": {
+      "**/node_modules": true,
+      "**/.git": true,
+      "**/dist": true,
+      "**/build": true
+    }
+  }
+} 
