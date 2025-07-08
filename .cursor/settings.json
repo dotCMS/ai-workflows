@@ -4,7 +4,8 @@
     "git-workflow": "Use version tags for production stability and follow safe command patterns",
     "release-process": "Follow the release checklist and use semantic versioning",
     "error-prevention": "Test simple commands first and have recovery procedures ready",
-    "development-patterns": "Maintain code quality, security, and collaboration standards"
+    "development-patterns": "Maintain code quality, security, and collaboration standards",
+    "thoughtful-execution": "Always present plans first, think deeply, ask clarifying questions, and remember slow is smooth"
   },
   "formatOnSave": true,
   "defaultFormatter": "prettier",
