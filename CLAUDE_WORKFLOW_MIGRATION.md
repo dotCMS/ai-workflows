@@ -82,8 +82,26 @@ After setup, test the workflows by:
 
 1. **Ensure reusable workflows exist** in claude-workflows repository (already done here)
 2. **Test the migration** with a sample PR
-3. **Apply to other repositories** using the same pattern
+3. **Apply to other repositories** using the same pattern with version tags (e.g., `@v1.0.0`)
 4. **Document usage** for other teams
+
+## ⚠️ Important: Use Version Tags for Production
+
+When referencing the centralized workflows, **always use version tags** instead of `@main`:
+
+```yaml
+# ✅ Good - Production stable
+uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+
+# ❌ Bad - Can cause unexpected behavior
+uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+```
+
+**Why version tags matter:**
+- **Stability**: Version tags are immutable and won't change unexpectedly
+- **Predictability**: You know exactly which version you're using
+- **Rollback**: Easy to rollback to previous versions if needed
+- **Production Safety**: Prevents breaking changes from affecting production workflows
 
 ## Benefits for Other Repositories
 
