@@ -1,5 +1,13 @@
 # Development Best Practices
 
+## Quick Reference
+- **Keep documentation up to date** with code changes
+- **Use descriptive names** for files, branches, and commits
+- **Write tests** for new features and ensure existing tests pass
+- **Use feature branches** for new development
+- **Review all code changes** and address feedback promptly
+- **Follow security best practices** and never commit secrets
+
 ## Code Quality Standards
 
 ### Documentation
@@ -154,4 +162,10 @@
 - ✅ Provide feedback
 - ✅ Learn from others
 - ✅ Document decisions
-- ✅ Ask questions 
+- ✅ Ask questions
+
+## Related Rules
+- **Git Workflow**: See `git-workflow.md` for version control best practices
+- **Release Process**: See `release-process.md` for release management
+- **Error Prevention**: See `error-prevention.md` for quality assurance
+- **Thoughtful Execution**: See `thoughtful-execution.md` for collaboration guidelines 

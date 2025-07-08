@@ -1,5 +1,13 @@
 # Error Prevention and Recovery
 
+## Quick Reference
+- **Test simple commands first** before complex operations
+- **Use file-based approaches** for complex content
+- **Stop immediately** (Ctrl+C) if commands hang with `dquote>` or `>` prompts
+- **Break down operations** into smaller steps
+- **Have recovery procedures** ready for common issues
+- **Communicate problems** openly instead of hiding them
+
 ## Common Issues and Solutions
 
 ### ZSH Escaping Issues
@@ -156,4 +164,10 @@ delete_file "test.md"
 - ❌ Skip testing simple commands first
 - ❌ Leave temporary files around
 - ❌ Use @main in production workflows
-- ❌ Ignore error messages 
+- ❌ Ignore error messages
+
+## Related Rules
+- **Terminal Commands**: See `terminal-commands.md` for zsh escaping best practices
+- **Git Workflow**: See `git-workflow.md` for git-specific error handling
+- **Release Process**: See `release-process.md` for release troubleshooting
+- **Thoughtful Execution**: See `thoughtful-execution.md` for planning to prevent errors 

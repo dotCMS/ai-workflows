@@ -1,5 +1,13 @@
 # Thoughtful Execution and Human Collaboration
 
+## Quick Reference
+- **Always present a detailed plan** before executing complex operations
+- **Think through the entire process** and consider edge cases
+- **Ask clarifying questions** when requirements are unclear
+- **Wait for human approval** before proceeding with execution
+- **Remember: Slow is smooth, smooth is fast** - quality over speed
+- **Communicate openly** about problems and progress
+
 ## Core Principles
 
 ### 1. Always Present a Plan First
@@ -187,4 +195,11 @@ Also, what version tag should I use for the examples - @v1.0.0 or @main?
 - ❌ Sacrifice quality for speed
 
 ## Remember
-**"Slow is smooth, and smooth is fast!"** - Taking the time to plan carefully and execute methodically leads to better results and fewer problems in the long run. 
+**"Slow is smooth, and smooth is fast!"** - Taking the time to plan carefully and execute methodically leads to better results and fewer problems in the long run.
+
+## Related Rules
+- **Terminal Commands**: See `terminal-commands.md` for safe command execution
+- **Git Workflow**: See `git-workflow.md` for version control planning
+- **Release Process**: See `release-process.md` for release planning
+- **Error Prevention**: See `error-prevention.md` for risk mitigation
+- **Development Patterns**: See `development-patterns.md` for collaboration guidelines 

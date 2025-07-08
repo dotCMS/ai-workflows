@@ -1,5 +1,13 @@
 # Terminal Command Best Practices
 
+## Quick Reference
+- **ALWAYS** use single quotes for simple strings
+- **AVOID** complex multi-line strings with special characters
+- **USE** separate files for complex content instead of inline strings
+- **NEVER** use emojis or special characters in inline git commands
+- **ALWAYS** test simple commands first before complex ones
+- **STOP** immediately (Ctrl+C) if you see `dquote>` or `>` prompts
+
 ## ZSH Escaping Issues - CRITICAL
 
 ### Core Principles
@@ -48,4 +56,10 @@ If you get stuck in a zsh prompt:
 - Use `edit_file` tool for creating content files
 - Use `delete_file` tool to clean up temporary files
 - Always verify file contents before using them
-- Use descriptive filenames like `RELEASE_NOTES_v1.0.0.md` 
+- Use descriptive filenames like `RELEASE_NOTES_v1.0.0.md`
+
+## Related Rules
+- **Git Workflow**: See `git-workflow.md` for git-specific command patterns
+- **Error Prevention**: See `error-prevention.md` for recovery procedures
+- **Release Process**: See `release-process.md` for release automation
+- **Thoughtful Execution**: See `thoughtful-execution.md` for planning guidelines 

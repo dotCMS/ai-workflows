@@ -1,5 +1,13 @@
 # Release Process Guidelines
 
+## Quick Reference
+- **Always use version tags** (`@v1.0.0`) instead of `@main` for production stability
+- **Create release notes in separate files** using `edit_file` tool
+- **Use simple git tag commands** without complex inline messages
+- **Follow semantic versioning** (MAJOR.MINOR.PATCH)
+- **Test each command individually** before combining operations
+- **Clean up temporary files** after release creation
+
 ## Release Process Checklist
 
 ### Pre-Release Preparation
@@ -127,4 +135,10 @@ delete_file "RELEASE_NOTES_v1.0.0.md"
 - [ ] Check that tag is correct
 - [ ] Test that consuming repos can use new version
 - [ ] Monitor for any issues
-- [ ] Update any internal documentation 
+- [ ] Update any internal documentation
+
+## Related Rules
+- **Git Workflow**: See `git-workflow.md` for git and GitHub CLI patterns
+- **Terminal Commands**: See `terminal-commands.md` for zsh escaping best practices
+- **Error Prevention**: See `error-prevention.md` for troubleshooting
+- **Thoughtful Execution**: See `thoughtful-execution.md` for planning guidelines 

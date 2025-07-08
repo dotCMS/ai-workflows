@@ -1,5 +1,12 @@
 # Git and GitHub CLI Best Practices
 
+## Quick Reference
+- **Use version tags** (`@v1.0.0`) instead of `@main` for production stability
+- **Create release notes in files** instead of inline messages
+- **Use simple git commands** without complex inline content
+- **Test simple commands first** before complex operations
+- **Use file-based approach** for complex content (PR descriptions, release notes)
+
 ## Git Commands - Safe Patterns
 
 ### Tagging and Releases
@@ -73,4 +80,10 @@ gh pr create --title "Complex Title 🚀" --body "Complex description with @ment
 - Use file-based approaches for complex content
 - Verify results after each step
 - Check command output for zsh errors
-- If you see `dquote>` or `>` prompts, cancel and simplify 
+- If you see `dquote>` or `>` prompts, cancel and simplify
+
+## Related Rules
+- **Terminal Commands**: See `terminal-commands.md` for zsh escaping best practices
+- **Release Process**: See `release-process.md` for release automation
+- **Error Prevention**: See `error-prevention.md` for troubleshooting
+- **Thoughtful Execution**: See `thoughtful-execution.md` for planning guidelines 
