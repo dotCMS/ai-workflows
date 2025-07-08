@@ -31,7 +31,7 @@ on:
 jobs:
   # Interactive Claude mentions (simplified using centralized logic)
   claude-interactive:
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: interactive
       allowed_tools: |
@@ -55,7 +55,7 @@ jobs:
       !contains(github.event.pull_request.body, '@claude') &&
       !contains(github.event.pull_request.body, '@Claude') &&
       !contains(github.event.pull_request.body, '@CLAUDE')
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: automatic
       direct_prompt: |

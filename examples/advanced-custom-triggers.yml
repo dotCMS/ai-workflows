@@ -31,7 +31,7 @@ on:
 jobs:
   # Example 1: Custom trigger for urgent issues only
   claude-urgent-issues:
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: interactive
       # Custom condition: Only trigger for issues labeled as "urgent" or "critical"
@@ -52,7 +52,7 @@ jobs:
 
   # Example 2: Custom trigger for specific file changes
   claude-config-changes:
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: automatic
       # Custom condition: Only trigger for PRs that modify configuration files
@@ -81,7 +81,7 @@ jobs:
 
   # Example 3: Custom trigger combining multiple conditions
   claude-security-review:
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: automatic
       # Custom condition: Security-related changes or mentions
@@ -115,7 +115,7 @@ jobs:
 
   # Example 4: Fallback with default @claude mention detection
   claude-general:
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: interactive
       # No custom condition - will use default @claude mention detection
