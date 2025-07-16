@@ -1,6 +1,6 @@
-# Weekly Work Summary
+# Team Work Summary
 
-Generate a summary of completed work (merged PRs) for the previous week.
+Generate a summary of completed work (merged PRs) for a specific team within a date range.
 
 ## Usage
 
@@ -23,7 +23,7 @@ Generate a summary of completed work (merged PRs) for the previous week.
 
 ## Implementation
 
-Generate a weekly work summary showing what was actually delivered (merged PRs) for $ARGUMENTS.
+Generate a team work summary showing what was actually delivered (merged PRs) for the specified team within the given date range: $ARGUMENTS.
 
 **Team Definitions:**
 
@@ -52,8 +52,8 @@ GitHub username mapping:
 Output format:
 
 ```
-## [Team Name] Team - Weekly Work Summary
-### Week of [start-date] to [end-date]
+## [Team Name] Team - Work Summary
+### Period: [start-date] to [end-date]
 
 **7 key deliveries completed:**
 • ✨ Analytics platform enhancements: dashboard consolidation, siteKey validation, dependency updates, and CubeJS schema improvements
@@ -71,4 +71,5 @@ Output format:
 
 - Only show PRs that were actually **merged** (completed work)
 - Use `mergedAt` date for filtering, not `closedAt`
-- This gives stakeholders a clear view of what was actually delivered last week
+- Filter by team members based on the team parameter
+- This gives stakeholders a clear view of what was actually delivered during the specified period
