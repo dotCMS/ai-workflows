@@ -1,4 +1,4 @@
-# claude-workflows
+# ai-workflows
 Reusable Claude AI GitHub Actions workflows and config for dotCMS and related projects
 
 ## 🚀 Centralized Claude Workflows: Migration & Overview
@@ -23,7 +23,7 @@ If you previously used the pilot Claude workflow in `dotcms/infrastructure-as-co
    ```yaml
    jobs:
      claude:
-       uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+       uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
        with:
          trigger_mode: automatic  # or 'interactive' for @claude mentions
          # Customize as needed for your repo
@@ -142,7 +142,7 @@ on:
 jobs:
   # Interactive Claude mentions using built-in detection
   claude-interactive:
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: interactive
       allowed_tools: |
@@ -155,7 +155,7 @@ jobs:
   # Automatic PR reviews (no @claude mention required)
   claude-automatic:
     if: github.event_name == 'pull_request'
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: automatic
       direct_prompt: |
@@ -187,7 +187,7 @@ For advanced use cases beyond @claude mentions, use `custom_trigger_condition`:
 ```yaml
 jobs:
   claude-security-review:
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: automatic
       custom_trigger_condition: |
@@ -218,7 +218,7 @@ See the `examples/` directory for complete workflow examples:
 
 **Basic @claude mention detection:**
 ```yaml
-uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
 with:
   trigger_mode: interactive
   enable_mention_detection: true
@@ -226,7 +226,7 @@ with:
 
 **Automatic PR reviews:**
 ```yaml
-uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
 with:
   trigger_mode: automatic
   direct_prompt: "Review this PR for quality and security."
@@ -235,7 +235,7 @@ with:
 
 **Custom triggers for urgent issues:**
 ```yaml
-uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
 with:
   trigger_mode: interactive
   custom_trigger_condition: |
