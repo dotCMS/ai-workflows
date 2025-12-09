@@ -178,6 +178,62 @@ jobs:
 
           CHANGED_FILES='${{ needs.detect-changes.outputs.changed-files }}'
 
+          # Function to classify version type and extract comparable value
+          classify_version() {
+            local image=$1
+            local tag="${image##*:}"
+
+            # Category 1: Unversioned tags (BLOCK)
+            if [[ "$tag" =~ ^(latest|trunk|nightly|buildcache)$ ]]; then
+              echo "unversioned|$tag|0"
+              return
+            fi
+
+            # Category 2: Feature branches/special builds (check early)
+            if [[ "$tag" =~ (issue-|SNAPSHOT|_SNAPSHOT) ]]; then
+              echo "feature|$tag|0"
+              return
+            fi
+
+            # Category 3: Date-based version (YY.MM.DD where YY >= 20)
+            # This must be checked BEFORE semantic to avoid misclassification
+            if [[ "$tag" =~ ^([0-9]{2})\.([0-9]{2})\.([0-9]{2}) ]]; then
+              local year="${BASH_REMATCH[1]}"
+              local month="${BASH_REMATCH[2]}"
+              local day="${BASH_REMATCH[3]}"
+
+              # If year >= 20, treat as date-based version (2020+)
+              if [ "$((10#$year))" -ge 20 ]; then
+                # Convert to comparable number: YYMMDD (e.g., 25.12.08 -> 251208)
+                # Use 10# prefix to force decimal interpretation (avoid octal issues)
+                local y=$((10#$year))
+                local m=$((10#$month))
+                local d=$((10#$day))
+                # Format as YYMMDD: year*10000 + month*100 + day
+                local date_num=$((y * 10000 + m * 100 + d))
+                # Add 1000000 to ensure date versions are always > semantic versions
+                local comparable=$((1000000 + date_num))
+                printf "date|%s.%s.%s|%d" "$year" "$month" "$day" "$comparable"
+                return
+              fi
+            fi
+
+            # Category 4: Semantic version (X.Y.Z where X < 20)
+            if [[ "$tag" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+              local major="${BASH_REMATCH[1]}"
+              local minor="${BASH_REMATCH[2]}"
+              local patch="${BASH_REMATCH[3]}"
+              # Convert to comparable number using decimal (avoid octal)
+              # Format: MMmmmppp (e.g., 5.1.6 -> 005001006)
+              local comparable=$(printf "%03d%03d%03d" "$((10#$major))" "$((10#$minor))" "$((10#$patch))")
+              printf "semantic|%s.%s.%s|%s" "$major" "$minor" "$patch" "$comparable"
+              return
+            fi
+
+            # Category 5: Unknown format
+            echo "unknown|$tag|0"
+          }
+
           while IFS= read -r file; do
             echo "================================================================"
             echo "Processing: $file"
@@ -220,44 +276,74 @@ jobs:
               PASSED=false
             fi
 
-            # Parse and compare versions
+            # Classify versions
+            OLD_CLASS=$(classify_version "$OLD_IMAGE")
+            NEW_CLASS=$(classify_version "$NEW_IMAGE")
+
+            OLD_TYPE=$(echo "$OLD_CLASS" | cut -d'|' -f1)
+            OLD_VER=$(echo "$OLD_CLASS" | cut -d'|' -f2)
+            OLD_NUM=$(echo "$OLD_CLASS" | cut -d'|' -f3)
+
+            NEW_TYPE=$(echo "$NEW_CLASS" | cut -d'|' -f1)
+            NEW_VER=$(echo "$NEW_CLASS" | cut -d'|' -f2)
+            NEW_NUM=$(echo "$NEW_CLASS" | cut -d'|' -f3)
+
+            echo "OLD: type=$OLD_TYPE, version=$OLD_VER, comparable=$OLD_NUM"
+            echo "NEW: type=$NEW_TYPE, version=$NEW_VER, comparable=$NEW_NUM"
+
+            # Default status
             STATUS_EMOJI="✅"
-            VERSION_STATUS="Allowed (commit hash change)"
+            VERSION_STATUS="Allowed"
 
-            # Extract version components (e.g., 5.1.6 from dotcms/dotcms:5.1.6.k_b0daf0c)
-            if [[ $OLD_IMAGE =~ :([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
-              OLD_MAJOR="${BASH_REMATCH[1]}"
-              OLD_MINOR="${BASH_REMATCH[2]}"
-              OLD_PATCH="${BASH_REMATCH[3]}"
-            fi
+            # Apply validation rules
+            if [ "$OLD_TYPE" = "unversioned" ] || [ "$NEW_TYPE" = "unversioned" ]; then
+              echo "❌ BLOCKED: Unversioned tags not allowed in production"
+              VERSION_STATUS="Blocked: Unversioned tag (latest/trunk/nightly) not allowed"
+              STATUS_EMOJI="❌"
+              PASSED=false
 
-            if [[ $NEW_IMAGE =~ :([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
-              NEW_MAJOR="${BASH_REMATCH[1]}"
-              NEW_MINOR="${BASH_REMATCH[2]}"
-              NEW_PATCH="${BASH_REMATCH[3]}"
-            fi
+            elif [ "$OLD_TYPE" = "unknown" ] || [ "$NEW_TYPE" = "unknown" ]; then
+              echo "⚠️  UNKNOWN FORMAT: Requires approval"
+              VERSION_STATUS="Unknown version format - requires approval"
+              STATUS_EMOJI="⚠️"
+              REQUIRES_APPROVAL=true
 
-            # Compare versions if both were parsed
-            if [ -n "$OLD_MAJOR" ] && [ -n "$NEW_MAJOR" ]; then
-              # Check for downgrade
-              if [ "$NEW_MAJOR" -lt "$OLD_MAJOR" ] || \
-                 ([ "$NEW_MAJOR" -eq "$OLD_MAJOR" ] && [ "$NEW_MINOR" -lt "$OLD_MINOR" ]) || \
-                 ([ "$NEW_MAJOR" -eq "$OLD_MAJOR" ] && [ "$NEW_MINOR" -eq "$OLD_MINOR" ] && [ "$NEW_PATCH" -lt "$OLD_PATCH" ]); then
-                echo "❌ DOWNGRADE BLOCKED: ${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH} → ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
-                VERSION_STATUS="Downgrade blocked (${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH} → ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH})"
+            elif [ "$OLD_TYPE" = "feature" ] || [ "$NEW_TYPE" = "feature" ]; then
+              echo "⚠️  FEATURE BRANCH: Requires approval"
+              VERSION_STATUS="Feature branch deployment - requires approval"
+              STATUS_EMOJI="⚠️"
+              REQUIRES_APPROVAL=true
+
+            else
+              # Compare versions using comparable numbers
+              if [ "$NEW_NUM" -lt "$OLD_NUM" ]; then
+                # DOWNGRADE - BLOCKED
+                echo "❌ DOWNGRADE BLOCKED: $OLD_VER → $NEW_VER"
+                if [ "$OLD_TYPE" = "$NEW_TYPE" ]; then
+                  VERSION_STATUS="Downgrade blocked ($OLD_VER → $NEW_VER)"
+                else
+                  VERSION_STATUS="Downgrade blocked ($OLD_TYPE:$OLD_VER → $NEW_TYPE:$NEW_VER)"
+                fi
                 STATUS_EMOJI="❌"
                 PASSED=false
 
-              # Check for version upgrade
-              elif [ "$NEW_MAJOR" -gt "$OLD_MAJOR" ] || \
-                   ([ "$NEW_MAJOR" -eq "$OLD_MAJOR" ] && [ "$NEW_MINOR" -gt "$OLD_MINOR" ]) || \
-                   ([ "$NEW_MAJOR" -eq "$OLD_MAJOR" ] && [ "$NEW_MINOR" -eq "$OLD_MINOR" ] && [ "$NEW_PATCH" -gt "$OLD_PATCH" ]); then
-                echo "⚠️  VERSION UPGRADE: ${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH} → ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
-                VERSION_STATUS="Version upgrade (${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH} → ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}) - requires approval"
+              elif [ "$NEW_NUM" -gt "$OLD_NUM" ]; then
+                # UPGRADE - REQUIRES APPROVAL
+                echo "⚠️  VERSION UPGRADE: $OLD_VER → $NEW_VER"
+                if [ "$OLD_TYPE" = "$NEW_TYPE" ]; then
+                  VERSION_STATUS="Version upgrade ($OLD_VER → $NEW_VER) - requires approval"
+                else
+                  VERSION_STATUS="Cross-format upgrade ($OLD_TYPE:$OLD_VER → $NEW_TYPE:$NEW_VER) - requires approval"
+                fi
                 STATUS_EMOJI="⚠️"
                 REQUIRES_APPROVAL=true
+
               else
-                echo "✅ Same version, commit hash change only"
+                # SAME VERSION - Only hash/build changed
+                echo "✅ Same version ($OLD_VER), commit hash or build change only"
+                VERSION_STATUS="Allowed (commit hash/build change within same version $OLD_VER)"
+                STATUS_EMOJI="✅"
+                # Note: Could be changed to require approval here for Option 2 (restrictive)
               fi
             fi
 
@@ -266,6 +352,7 @@ jobs:
             REPORT="${REPORT}- **Old Image**: \`${OLD_IMAGE}\`\n"
             REPORT="${REPORT}- **New Image**: \`${NEW_IMAGE}\`\n"
             REPORT="${REPORT}- **Image Exists**: ${IMAGE_EXISTS}\n"
+            REPORT="${REPORT}- **Version Analysis**: ${OLD_TYPE}:\`${OLD_VER}\` → ${NEW_TYPE}:\`${NEW_VER}\`\n"
             REPORT="${REPORT}- **Status**: ${VERSION_STATUS}\n"
 
             echo ""
