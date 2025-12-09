@@ -76,9 +76,12 @@ jobs:
           echo "Validating files against pattern: $ALLOWED_PATTERN"
 
           # Convert glob pattern to regex
-          # Replace ** with .*
-          # Replace * with [^/]*
-          PATTERN_REGEX=$(echo "$ALLOWED_PATTERN" | sed 's|\*\*|.*|g' | sed 's|\*|[^/]*|g')
+          # First handle special case: .ya?ml → \.(yaml|yml)
+          # Then replace ** with placeholder to avoid conflict with *
+          # Then replace * with [^/]* (match any character except /)
+          # Then replace placeholder with .* (match any character including /)
+          # Note: Using # as delimiter to avoid conflicts with |
+          PATTERN_REGEX=$(echo "$ALLOWED_PATTERN" | sed 's#\.ya?ml#\\.(yaml\\|yml)#g' | sed 's#\*\*#__DOUBLESTAR__#g' | sed 's#\*#[^/]*#g' | sed 's#__DOUBLESTAR__#.*#g')
 
           ALL_ALLOWED=true
           DISALLOWED_FILES=""
