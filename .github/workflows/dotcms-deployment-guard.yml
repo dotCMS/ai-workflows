@@ -1,0 +1,518 @@
+---
+name: dotCMS Deployment Guardrails
+
+on:
+  workflow_call:
+    inputs:
+      statefulset_pattern:
+        description: 'Regex pattern for statefulset files to validate'
+        required: false
+        type: string
+        default: 'kubernetes/dotcms/.*statefulset\.yaml$'
+
+      require_approval_label:
+        description: 'Label required for infrastructure changes'
+        required: false
+        type: string
+        default: 'approved-by-dotcms-team'
+
+      base_branch:
+        description: 'Base branch to compare against'
+        required: false
+        type: string
+        default: 'main'
+
+      enable_yaml_validation:
+        description: 'Enable basic YAML syntax validation'
+        required: false
+        type: boolean
+        default: true
+
+      enable_image_validation:
+        description: 'Enable Docker image validation'
+        required: false
+        type: boolean
+        default: true
+
+      enable_infrastructure_validation:
+        description: 'Enable infrastructure changes validation'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  # ================================================================
+  # JOB 1: Detect Changed Files
+  # ================================================================
+  detect-changes:
+    name: Detect Changed Files
+    runs-on: ubuntu-latest
+    outputs:
+      has-changes: ${{ steps.detect.outputs.has-changes }}
+      changed-files: ${{ steps.detect.outputs.changed-files }}
+      changed-files-json: ${{ steps.detect.outputs.changed-files-json }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ inputs.base_branch }}
+
+      - name: Detect changed StatefulSet files
+        id: detect
+        run: |
+          echo "Detecting changed files matching pattern: ${{ inputs.statefulset_pattern }}"
+
+          CHANGED_FILES=$(git diff --name-only --diff-filter=AM origin/${{ inputs.base_branch }}...HEAD | \
+                          grep -E "${{ inputs.statefulset_pattern }}" || true)
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "✅ No matching files changed"
+            exit 0
+          fi
+
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+
+          # Save as newline-delimited string
+          echo "changed-files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Save as JSON array for easier processing
+          CHANGED_FILES_JSON=$(echo "$CHANGED_FILES" | jq -R . | jq -s .)
+          echo "changed-files-json=$CHANGED_FILES_JSON" >> $GITHUB_OUTPUT
+
+          echo "Changed files:"
+          echo "$CHANGED_FILES" | sed 's/^/  - /'
+
+  # ================================================================
+  # JOB 2: YAML Syntax Validation
+  # ================================================================
+  yaml-validation:
+    name: YAML Syntax Validation
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.has-changes == 'true' &&
+      inputs.enable_yaml_validation == true
+    outputs:
+      validation-passed: ${{ steps.validate.outputs.passed }}
+      validation-report: ${{ steps.validate.outputs.report }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install --quiet yamllint
+
+      - name: Validate YAML syntax
+        id: validate
+        run: |
+          echo "Validating YAML syntax..."
+
+          PASSED=true
+          REPORT=""
+
+          CHANGED_FILES='${{ needs.detect-changes.outputs.changed-files }}'
+
+          while IFS= read -r file; do
+            echo "Checking: $file"
+
+            if yamllint -d "{extends: default, rules: {line-length: {max: 200}, document-start: disable, truthy: disable, comments: disable}}" "$file" 2>&1 | grep -v "^$"; then
+              echo "✅ Valid: $file"
+            else
+              echo "❌ Invalid: $file"
+              PASSED=false
+              REPORT="${REPORT}\n- **\`${file}\`**: YAML syntax errors"
+            fi
+          done <<< "$CHANGED_FILES"
+
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  # ================================================================
+  # JOB 3: Image Validation
+  # ================================================================
+  image-validation:
+    name: Container Image Validation
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.has-changes == 'true' &&
+      inputs.enable_image_validation == true
+    outputs:
+      validation-passed: ${{ steps.validate.outputs.passed }}
+      validation-report: ${{ steps.validate.outputs.report }}
+      requires-approval: ${{ steps.validate.outputs.requires-approval }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ inputs.base_branch }}
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Validate container images
+        id: validate
+        run: |
+          echo "Validating container images..."
+
+          PASSED=true
+          REQUIRES_APPROVAL=false
+          REPORT=""
+
+          CHANGED_FILES='${{ needs.detect-changes.outputs.changed-files }}'
+
+          while IFS= read -r file; do
+            echo "================================================================"
+            echo "Processing: $file"
+            echo "================================================================"
+
+            # Check if file exists in base branch
+            if ! git cat-file -e origin/${{ inputs.base_branch }}:"$file" 2>/dev/null; then
+              echo "ℹ️  New file - skipping comparison"
+              REPORT="${REPORT}\n### 🆕 \`${file}\`\n- **Status**: New file\n"
+              continue
+            fi
+
+            # Extract images
+            OLD_IMAGE=$(git show origin/${{ inputs.base_branch }}:"$file" | yq eval '.spec.template.spec.containers[0].image' - 2>/dev/null || echo "")
+            NEW_IMAGE=$(yq eval '.spec.template.spec.containers[0].image' "$file" 2>/dev/null || echo "")
+
+            if [ -z "$NEW_IMAGE" ]; then
+              echo "⚠️  Cannot extract image"
+              PASSED=false
+              REPORT="${REPORT}\n### ⚠️ \`${file}\`\n- **Error**: Cannot extract container image\n"
+              continue
+            fi
+
+            echo "OLD IMAGE: $OLD_IMAGE"
+            echo "NEW IMAGE: $NEW_IMAGE"
+
+            if [ "$OLD_IMAGE" = "$NEW_IMAGE" ]; then
+              echo "ℹ️  No image change"
+              continue
+            fi
+
+            # Check if image exists in registry
+            echo "Verifying image exists in registry..."
+            if docker manifest inspect "$NEW_IMAGE" >/dev/null 2>&1; then
+              echo "✅ Image exists"
+              IMAGE_EXISTS="✅ Verified"
+            else
+              echo "❌ Image NOT FOUND"
+              IMAGE_EXISTS="❌ Not found"
+              PASSED=false
+            fi
+
+            # Parse and compare versions
+            STATUS_EMOJI="✅"
+            VERSION_STATUS="Allowed (commit hash change)"
+
+            # Extract version components (e.g., 5.1.6 from dotcms/dotcms:5.1.6.k_b0daf0c)
+            if [[ $OLD_IMAGE =~ :([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+              OLD_MAJOR="${BASH_REMATCH[1]}"
+              OLD_MINOR="${BASH_REMATCH[2]}"
+              OLD_PATCH="${BASH_REMATCH[3]}"
+            fi
+
+            if [[ $NEW_IMAGE =~ :([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+              NEW_MAJOR="${BASH_REMATCH[1]}"
+              NEW_MINOR="${BASH_REMATCH[2]}"
+              NEW_PATCH="${BASH_REMATCH[3]}"
+            fi
+
+            # Compare versions if both were parsed
+            if [ -n "$OLD_MAJOR" ] && [ -n "$NEW_MAJOR" ]; then
+              # Check for downgrade
+              if [ "$NEW_MAJOR" -lt "$OLD_MAJOR" ] || \
+                 ([ "$NEW_MAJOR" -eq "$OLD_MAJOR" ] && [ "$NEW_MINOR" -lt "$OLD_MINOR" ]) || \
+                 ([ "$NEW_MAJOR" -eq "$OLD_MAJOR" ] && [ "$NEW_MINOR" -eq "$OLD_MINOR" ] && [ "$NEW_PATCH" -lt "$OLD_PATCH" ]); then
+                echo "❌ DOWNGRADE BLOCKED: ${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH} → ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
+                VERSION_STATUS="Downgrade blocked (${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH} → ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH})"
+                STATUS_EMOJI="❌"
+                PASSED=false
+
+              # Check for version upgrade
+              elif [ "$NEW_MAJOR" -gt "$OLD_MAJOR" ] || \
+                   ([ "$NEW_MAJOR" -eq "$OLD_MAJOR" ] && [ "$NEW_MINOR" -gt "$OLD_MINOR" ]) || \
+                   ([ "$NEW_MAJOR" -eq "$OLD_MAJOR" ] && [ "$NEW_MINOR" -eq "$OLD_MINOR" ] && [ "$NEW_PATCH" -gt "$OLD_PATCH" ]); then
+                echo "⚠️  VERSION UPGRADE: ${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH} → ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
+                VERSION_STATUS="Version upgrade (${OLD_MAJOR}.${OLD_MINOR}.${OLD_PATCH} → ${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}) - requires approval"
+                STATUS_EMOJI="⚠️"
+                REQUIRES_APPROVAL=true
+              else
+                echo "✅ Same version, commit hash change only"
+              fi
+            fi
+
+            # Add to report
+            REPORT="${REPORT}\n### ${STATUS_EMOJI} \`${file}\`\n"
+            REPORT="${REPORT}- **Old Image**: \`${OLD_IMAGE}\`\n"
+            REPORT="${REPORT}- **New Image**: \`${NEW_IMAGE}\`\n"
+            REPORT="${REPORT}- **Image Exists**: ${IMAGE_EXISTS}\n"
+            REPORT="${REPORT}- **Status**: ${VERSION_STATUS}\n"
+
+            echo ""
+          done <<< "$CHANGED_FILES"
+
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "requires-approval=$REQUIRES_APPROVAL" >> $GITHUB_OUTPUT
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  # ================================================================
+  # JOB 4: Infrastructure Changes Validation
+  # ================================================================
+  infrastructure-validation:
+    name: Infrastructure Changes Validation
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.has-changes == 'true' &&
+      inputs.enable_infrastructure_validation == true
+    outputs:
+      validation-passed: ${{ steps.validate.outputs.passed }}
+      validation-report: ${{ steps.validate.outputs.report }}
+      requires-approval: ${{ steps.validate.outputs.requires-approval }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ inputs.base_branch }}
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Check for unauthorized infrastructure changes
+        id: validate
+        run: |
+          echo "Checking for unauthorized infrastructure changes..."
+
+          REQUIRES_APPROVAL=false
+          REPORT=""
+
+          PROTECTED_PATHS=(
+            ".spec.replicas"
+            ".spec.template.spec.containers[0].resources"
+            ".spec.template.spec.containers[0].env"
+            ".spec.template.spec.containers[0].volumeMounts"
+            ".spec.template.spec.volumes"
+            ".spec.template.spec.serviceAccount"
+          )
+
+          CHANGED_FILES='${{ needs.detect-changes.outputs.changed-files }}'
+
+          while IFS= read -r file; do
+            echo "================================================================"
+            echo "Checking: $file"
+            echo "================================================================"
+
+            if ! git cat-file -e origin/${{ inputs.base_branch }}:"$file" 2>/dev/null; then
+              echo "ℹ️  New file - skipping"
+              continue
+            fi
+
+            FILE_CHANGES=""
+            HAS_CHANGES=false
+
+            for path in "${PROTECTED_PATHS[@]}"; do
+              OLD_VAL=$(git show origin/${{ inputs.base_branch }}:"$file" | yq eval "$path" - 2>/dev/null || echo "null")
+              NEW_VAL=$(yq eval "$path" "$file" 2>/dev/null || echo "null")
+
+              if [ "$OLD_VAL" != "$NEW_VAL" ]; then
+                echo "⚠️  Change detected: $path"
+                HAS_CHANGES=true
+                FILE_CHANGES="${FILE_CHANGES}\n  - \`${path}\`"
+              fi
+            done
+
+            if [ "$HAS_CHANGES" = "true" ]; then
+              echo "⚠️  Protected fields modified"
+              REQUIRES_APPROVAL=true
+              REPORT="${REPORT}\n### ⚠️ \`${file}\`\n"
+              REPORT="${REPORT}**Protected fields modified:**${FILE_CHANGES}\n"
+            else
+              echo "✅ No unauthorized changes"
+            fi
+
+            echo ""
+          done <<< "$CHANGED_FILES"
+
+          echo "passed=true" >> $GITHUB_OUTPUT
+          echo "requires-approval=$REQUIRES_APPROVAL" >> $GITHUB_OUTPUT
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  # ================================================================
+  # JOB 5: Check Approval & Generate Report
+  # ================================================================
+  finalize-validation:
+    name: Finalize Validation
+    runs-on: ubuntu-latest
+    needs: [detect-changes, yaml-validation, image-validation, infrastructure-validation]
+    if: always() && needs.detect-changes.outputs.has-changes == 'true'
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Check for approval from CODEOWNERS
+        id: check-approval
+        if: |
+          needs.image-validation.outputs.requires-approval == 'true' ||
+          needs.infrastructure-validation.outputs.requires-approval == 'true'
+        run: |
+          echo "Changes require approval - checking PR reviews..."
+
+          # Get PR reviews
+          REVIEWS=$(gh pr view ${{ github.event.pull_request.number }} \
+            --json reviews --jq '[.reviews[] | select(.state=="APPROVED")] | length')
+
+          if [ "$REVIEWS" -gt 0 ]; then
+            echo "✅ PR has approval from reviewers"
+            echo "approved=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ PR requires approval from CODEOWNERS"
+            echo "approved=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Add label if approval needed
+        if: |
+          (needs.image-validation.outputs.requires-approval == 'true' ||
+           needs.infrastructure-validation.outputs.requires-approval == 'true') &&
+          steps.check-approval.outputs.approved != 'true'
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --add-label "needs-dotcms-approval"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Generate and post report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Collect validation results
+            const yamlPassed = '${{ needs.yaml-validation.outputs.validation-passed }}' !== 'false';
+            const imagePassed = '${{ needs.image-validation.outputs.validation-passed }}' !== 'false';
+            const infraPassed = '${{ needs.infrastructure-validation.outputs.validation-passed }}' !== 'false';
+
+            const imageRequiresApproval = '${{ needs.image-validation.outputs.requires-approval }}' === 'true';
+            const infraRequiresApproval = '${{ needs.infrastructure-validation.outputs.requires-approval }}' === 'true';
+            const requiresApproval = imageRequiresApproval || infraRequiresApproval;
+
+            const approved = '${{ steps.check-approval.outputs.approved }}' === 'true';
+
+            // Build report
+            let report = '## 🛡️ dotCMS Deployment Validation Report\n\n';
+
+            report += '### 📊 Validation Summary\n\n';
+            report += '| Check | Status |\n';
+            report += '|-------|--------|\n';
+            report += `| YAML Syntax | ${yamlPassed ? '✅ Passed' : '❌ Failed'} |\n`;
+            report += `| Image Validation | ${imagePassed ? '✅ Passed' : '❌ Failed'} |\n`;
+            report += `| Infrastructure | ${infraPassed ? '✅ Passed' : '❌ Failed'} |\n`;
+
+            if (requiresApproval) {
+              report += `| Authorization | ${approved ? '✅ Approved' : '⚠️ Required'} |\n`;
+            } else {
+              report += '| Authorization | ✅ Not Required |\n';
+            }
+            report += '\n';
+
+            // Add detailed reports
+            const yamlReport = `${{ needs.yaml-validation.outputs.validation-report }}`.trim();
+            const imageReport = `${{ needs.image-validation.outputs.validation-report }}`.trim();
+            const infraReport = `${{ needs.infrastructure-validation.outputs.validation-report }}`.trim();
+
+            if (yamlReport) {
+              report += '### ❌ YAML Syntax Errors\n\n' + yamlReport + '\n\n';
+            }
+
+            if (imageReport) {
+              report += '### 📦 Container Image Analysis\n' + imageReport + '\n\n';
+            }
+
+            if (infraReport) {
+              report += '### ⚠️ Infrastructure Changes Detected\n\n' + infraReport;
+              report += '\n**⚠️ Action Required**: These changes require approval from the dotCMS Platform Team.\n';
+              report += 'A member of the team listed in CODEOWNERS must approve this PR.\n\n';
+            }
+
+            // Final verdict
+            report += '---\n\n';
+            const validationPassed = yamlPassed && imagePassed && infraPassed && (!requiresApproval || approved);
+
+            if (validationPassed) {
+              report += '### ✅ Validation Passed\n\n';
+              report += 'All deployment guardrails checks passed. This PR is ready for review and merge.\n';
+            } else {
+              report += '### ❌ Validation Failed\n\n';
+              report += 'Please address the issues identified above before merging this PR.\n\n';
+
+              if (requiresApproval && !approved) {
+                report += '**Required Actions:**\n';
+                report += '1. Request review from the dotCMS Platform Team (see CODEOWNERS)\n';
+                report += '2. A team member must approve the PR for infrastructure/version changes\n';
+                report += '3. Or revert the unauthorized changes to proceed with image updates only\n';
+              }
+            }
+
+            // Find existing bot comment or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('🛡️ dotCMS Deployment Validation Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: report
+              });
+              console.log('✅ Updated existing validation report comment');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: report
+              });
+              console.log('✅ Created new validation report comment');
+            }
+
+            // Fail the workflow if validation failed
+            if (!validationPassed) {
+              core.setFailed('❌ Deployment validation failed - see report above for details');
+            }
