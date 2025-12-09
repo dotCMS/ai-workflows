@@ -1,32 +1,55 @@
 ---
-name: Deutsche Bank Deployment Guard
+name: Deployment Guard
 
 on:
   workflow_call:
     inputs:
+      # Validation toggles - enable/disable specific checks
+      enable_file_allowlist:
+        description: 'Enable file allowlist validation'
+        required: false
+        type: boolean
+        default: true
+      enable_image_only_check:
+        description: 'Enable image-only change validation (blocks if other fields changed)'
+        required: false
+        type: boolean
+        default: true
+      enable_image_validation:
+        description: 'Enable image repository, format, and version validation'
+        required: false
+        type: boolean
+        default: true
+
+      # File allowlist configuration
       allowed_files_pattern:
         description: 'Glob pattern for allowed files (e.g., kubernetes/dotcms/**/statefulset.yaml)'
-        required: true
-        type: string
-      allowed_image_repositories:
-        description: 'Comma-separated list of allowed image repositories (e.g., dotcms/dotcms)'
-        required: true
-        type: string
-      allowed_version_pattern:
-        description: 'Regex pattern for allowed version tags (default: date-based YY.MM.DD where YY >= 25)'
         required: false
         type: string
-        default: '^(2[5-9]|[3-9][0-9])\.[0-9]{2}\.[0-9]{2}'
+        default: '**/*'
+
+      # Image validation configuration
+      allowed_image_repositories:
+        description: 'Comma-separated list of allowed image repositories (e.g., dotcms/dotcms)'
+        required: false
+        type: string
+        default: ''
+      allowed_version_pattern:
+        description: 'Regex pattern for allowed version tags (default: any)'
+        required: false
+        type: string
+        default: '.*'
       verify_image_existence:
         description: 'Whether to verify image exists in registry'
         required: false
         type: boolean
-        default: true
+        default: false
 
 jobs:
   validate-changed-files:
     name: Validate Changed Files
     runs-on: ubuntu-latest
+    if: ${{ inputs.enable_file_allowlist }}
     outputs:
       allowed-files-check: ${{ steps.check-files.outputs.result }}
       changed-files: ${{ steps.get-files.outputs.files }}
@@ -109,7 +132,10 @@ jobs:
     name: Validate Only Image Changed
     runs-on: ubuntu-latest
     needs: validate-changed-files
-    if: needs.validate-changed-files.outputs.allowed-files-check == 'pass'
+    if: |
+      always() &&
+      inputs.enable_image_only_check &&
+      (inputs.enable_file_allowlist == false || needs.validate-changed-files.outputs.allowed-files-check == 'pass')
     outputs:
       image-only-check: ${{ steps.check-changes.outputs.result }}
       new-images: ${{ steps.check-changes.outputs.images }}
@@ -206,7 +232,10 @@ jobs:
     name: Validate Images
     runs-on: ubuntu-latest
     needs: validate-image-only-changed
-    if: needs.validate-image-only-changed.outputs.image-only-check == 'pass'
+    if: |
+      always() &&
+      inputs.enable_image_validation &&
+      (inputs.enable_image_only_check == false || needs.validate-image-only-changed.outputs.image-only-check == 'pass')
     outputs:
       image-validation: ${{ steps.validate.outputs.result }}
     steps:
@@ -245,25 +274,29 @@ jobs:
             echo "   Repository: $REPO"
             echo "   Tag: $TAG"
 
-            # 3. Check repository is in allowlist
-            REPO_ALLOWED=false
-            IFS=',' read -ra ALLOWED <<< "$ALLOWED_REPOS"
-            for allowed_repo in "${ALLOWED[@]}"; do
-              # Trim whitespace
-              allowed_repo=$(echo "$allowed_repo" | xargs)
-              if [[ "$REPO" == "$allowed_repo" ]]; then
-                REPO_ALLOWED=true
-                break
-              fi
-            done
+            # 3. Check repository is in allowlist (if configured)
+            if [ -n "$ALLOWED_REPOS" ]; then
+              REPO_ALLOWED=false
+              IFS=',' read -ra ALLOWED <<< "$ALLOWED_REPOS"
+              for allowed_repo in "${ALLOWED[@]}"; do
+                # Trim whitespace
+                allowed_repo=$(echo "$allowed_repo" | xargs)
+                if [[ "$REPO" == "$allowed_repo" ]]; then
+                  REPO_ALLOWED=true
+                  break
+                fi
+              done
 
-            if [ "$REPO_ALLOWED" = false ]; then
-              echo "❌ Repository not allowed: $REPO"
-              echo "   Allowed repositories: $ALLOWED_REPOS"
-              echo "false" > /tmp/validation_failed.txt
-              continue
+              if [ "$REPO_ALLOWED" = false ]; then
+                echo "❌ Repository not allowed: $REPO"
+                echo "   Allowed repositories: $ALLOWED_REPOS"
+                echo "false" > /tmp/validation_failed.txt
+                continue
+              fi
+              echo "✅ Repository is allowed"
+            else
+              echo "ℹ️  Repository validation skipped (no allowlist configured)"
             fi
-            echo "✅ Repository is allowed"
 
             # 4. Validate tag matches version pattern
             if ! [[ "$TAG" =~ $VERSION_PATTERN ]]; then
@@ -311,52 +344,80 @@ jobs:
           IMAGE_ONLY_CHECK="${{ needs.validate-image-only-changed.outputs.image-only-check }}"
           IMAGE_VALIDATION="${{ needs.validate-images.outputs.image-validation }}"
 
+          ENABLE_FILE_ALLOWLIST="${{ inputs.enable_file_allowlist }}"
+          ENABLE_IMAGE_ONLY="${{ inputs.enable_image_only_check }}"
+          ENABLE_IMAGE_VALIDATION="${{ inputs.enable_image_validation }}"
+
           echo "=================================================="
           echo "Validation Results Summary"
           echo "=================================================="
-          echo "Files allowlist check: $FILES_CHECK"
-          echo "Image-only change check: $IMAGE_ONLY_CHECK"
-          echo "Image validation: $IMAGE_VALIDATION"
+          echo "Enabled checks:"
+          echo "  - File allowlist: $ENABLE_FILE_ALLOWLIST"
+          echo "  - Image-only changes: $ENABLE_IMAGE_ONLY"
+          echo "  - Image validation: $ENABLE_IMAGE_VALIDATION"
+          echo ""
+          echo "Results:"
+          if [ "$ENABLE_FILE_ALLOWLIST" = "true" ]; then
+            echo "  - Files allowlist check: ${FILES_CHECK:-skipped}"
+          fi
+          if [ "$ENABLE_IMAGE_ONLY" = "true" ]; then
+            echo "  - Image-only change check: ${IMAGE_ONLY_CHECK:-skipped}"
+          fi
+          if [ "$ENABLE_IMAGE_VALIDATION" = "true" ]; then
+            echo "  - Image validation: ${IMAGE_VALIDATION:-skipped}"
+          fi
           echo "=================================================="
 
-          if [ "$FILES_CHECK" != "pass" ]; then
+          # Check file allowlist (if enabled)
+          if [ "$ENABLE_FILE_ALLOWLIST" = "true" ] && [ "$FILES_CHECK" != "pass" ]; then
             echo "❌ BLOCKED: Modified files are not in the allowlist"
             echo ""
             echo "Only the following files can be modified:"
             echo "  - ${{ inputs.allowed_files_pattern }}"
             echo ""
-            echo "Please ensure you're only modifying allowed StatefulSet files."
+            echo "Please ensure you're only modifying allowed files."
             exit 1
           fi
 
-          if [ "$IMAGE_ONLY_CHECK" != "pass" ]; then
+          # Check image-only changes (if enabled)
+          if [ "$ENABLE_IMAGE_ONLY" = "true" ] && [ "$IMAGE_ONLY_CHECK" != "pass" ]; then
             echo "❌ BLOCKED: Changes detected beyond the image field"
             echo ""
-            echo "Only the dotCMS container image field can be modified."
+            echo "Only the container image field can be modified."
             echo "No other changes are allowed (resources, env vars, volumes, etc.)"
             echo ""
             echo "Please revert any non-image changes and try again."
             exit 1
           fi
 
-          if [ "$IMAGE_VALIDATION" != "pass" ]; then
+          # Check image validation (if enabled)
+          if [ "$ENABLE_IMAGE_VALIDATION" = "true" ] && [ "$IMAGE_VALIDATION" != "pass" ]; then
             echo "❌ BLOCKED: Image validation failed"
             echo ""
             echo "Image validation requirements:"
-            echo "  - Repository must be: ${{ inputs.allowed_image_repositories }}"
+            if [ -n "${{ inputs.allowed_image_repositories }}" ]; then
+              echo "  - Repository must be: ${{ inputs.allowed_image_repositories }}"
+            fi
             echo "  - Tag must match pattern: ${{ inputs.allowed_version_pattern }}"
-            echo "  - Image must exist in the registry"
+            if [ "${{ inputs.verify_image_existence }}" = "true" ]; then
+              echo "  - Image must exist in the registry"
+            fi
             echo ""
             echo "Please use a valid image and try again."
             exit 1
           fi
 
-          echo "✅ All validations passed!"
-          echo ""
-          echo "The following images were validated and approved:"
-          echo '${{ needs.validate-image-only-changed.outputs.new-images }}' | jq -r '.[]' | while read img; do
-            echo "  ✅ $img"
-          done
+          echo "✅ All enabled validations passed!"
+
+          # Show validated images if available
+          NEW_IMAGES='${{ needs.validate-image-only-changed.outputs.new-images }}'
+          if [ -n "$NEW_IMAGES" ] && [ "$NEW_IMAGES" != "[]" ]; then
+            echo ""
+            echo "The following images were validated and approved:"
+            echo "$NEW_IMAGES" | jq -r '.[]' 2>/dev/null | while read img; do
+              echo "  ✅ $img"
+            done
+          fi
 
       - name: Create PR comment
         if: github.event_name == 'pull_request'
