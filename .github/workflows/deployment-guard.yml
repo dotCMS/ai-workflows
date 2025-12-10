@@ -100,11 +100,12 @@ jobs:
 
           # Convert glob pattern to regex
           # First handle special case: .ya?ml → \.(yaml|yml)
-          # Then replace ** with placeholder to avoid conflict with *
-          # Then replace * with [^/]* (match any character except /)
+          # Then replace **/ with placeholder (as a unit, including the slash)
+          # Then replace remaining * with [^/]* (match any character except /)
           # Then replace placeholder with ([^/]+/)* (match zero or more path segments)
           # Note: Using # as delimiter to avoid conflicts with |
-          PATTERN_REGEX=$(echo "$ALLOWED_PATTERN" | sed 's#\.ya?ml#\\.(yaml\\|yml)#g' | sed 's#\*\*#__DOUBLESTAR__#g' | sed 's#\*#[^/]*#g' | sed 's#__DOUBLESTAR__#([^/]+/)*#g')
+          # Note: In grep -E, | should NOT be escaped (it's a regex alternation operator)
+          PATTERN_REGEX=$(echo "$ALLOWED_PATTERN" | sed 's#\.ya?ml#\\.(yaml|yml)#g' | sed 's#\*\*/#__DOUBLESTAR__#g' | sed 's#\*#[^/]*#g' | sed 's#__DOUBLESTAR__#([^/]+/)*#g')
 
           echo "$CHANGED_FILES" | jq -r '.[]' | while IFS= read -r file; do
             if ! echo "$file" | grep -qE "^${PATTERN_REGEX}$"; then
