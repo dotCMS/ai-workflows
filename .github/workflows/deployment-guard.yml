@@ -106,14 +106,10 @@ jobs:
           # Note: Using # as delimiter to avoid conflicts with |
           PATTERN_REGEX=$(echo "$ALLOWED_PATTERN" | sed 's#\.ya?ml#\\.(yaml\\|yml)#g' | sed 's#\*\*#__DOUBLESTAR__#g' | sed 's#\*#[^/]*#g' | sed 's#__DOUBLESTAR__#.*#g')
 
-          ALL_ALLOWED=true
-          DISALLOWED_FILES=""
-
           echo "$CHANGED_FILES" | jq -r '.[]' | while IFS= read -r file; do
             if ! echo "$file" | grep -qE "^${PATTERN_REGEX}$"; then
               echo "❌ File not allowed: $file"
               echo "$file" >> /tmp/disallowed_files.txt
-              ALL_ALLOWED=false
             else
               echo "✅ File allowed: $file"
             fi
@@ -163,8 +159,6 @@ jobs:
           fi
 
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          NEW_IMAGES=()
-          ALL_PASS=true
 
           echo "$CHANGED_FILES" | jq -r '.[]' | while IFS= read -r file; do
             echo "=================================================="
@@ -186,7 +180,6 @@ jobs:
 
             if [ -z "$OLD_IMAGE" ] || [ -z "$NEW_IMAGE" ]; then
               echo "❌ Could not extract dotCMS container image"
-              ALL_PASS=false
               echo "false" > /tmp/validation_failed.txt
               continue
             fi
@@ -204,7 +197,6 @@ jobs:
               echo ""
               echo "Diff of normalized files:"
               diff <(echo "$OLD_NORMALIZED") <(echo "$NEW_NORMALIZED") || true
-              ALL_PASS=false
               echo "false" > /tmp/validation_failed.txt
             else
               echo "✅ Only image changed: $OLD_IMAGE → $NEW_IMAGE"
@@ -219,7 +211,7 @@ jobs:
             exit 1
           else
             if [ -f /tmp/new_images.txt ]; then
-              IMAGES_JSON=$(cat /tmp/new_images.txt | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique')
+              IMAGES_JSON=$(jq -R -s -c 'split("\n") | map(select(length > 0)) | unique' < /tmp/new_images.txt)
               echo "images=$IMAGES_JSON" >> "$GITHUB_OUTPUT"
             else
               echo "images=[]" >> "$GITHUB_OUTPUT"
@@ -252,8 +244,6 @@ jobs:
             echo "result=pass" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
-          ALL_VALID=true
 
           echo "$NEW_IMAGES" | jq -r '.[]' | while IFS= read -r image; do
             echo "=================================================="
@@ -414,7 +404,7 @@ jobs:
           if [ -n "$NEW_IMAGES" ] && [ "$NEW_IMAGES" != "[]" ]; then
             echo ""
             echo "The following images were validated and approved:"
-            echo "$NEW_IMAGES" | jq -r '.[]' 2>/dev/null | while read img; do
+            echo "$NEW_IMAGES" | jq -r '.[]' 2>/dev/null | while IFS= read -r img; do
               echo "  ✅ $img"
             done
           fi
