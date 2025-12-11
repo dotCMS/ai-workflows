@@ -52,6 +52,13 @@ on:
         type: boolean
         default: false
 
+      # Testing parameter
+      testing_force_non_bypass:
+        description: 'TESTING ONLY: Force non-bypass mode to test validation logic (ignores actual permissions)'
+        required: false
+        type: boolean
+        default: false
+
 permissions:
   contents: read
   pull-requests: write
@@ -105,30 +112,49 @@ jobs:
             let permissionLevel = 'none';
             let matchedTeam = '';
 
-            try {
-              console.log(`Checking permission level for ${actor}...`);
-              const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
-                owner: org,
-                repo: repo,
-                username: actor
-              });
+            // TESTING MODE: Force non-bypass if testing parameter is enabled
+            const testingForceNonBypass = '${{ inputs.testing_force_non_bypass }}' === 'true';
 
-              permissionLevel = permission.permission;
-              console.log(`  Permission level: ${permissionLevel}`);
+            if (testingForceNonBypass) {
+              console.log('');
+              console.log('⚠️  ============================================');
+              console.log('⚠️  TESTING MODE ENABLED');
+              console.log('⚠️  ============================================');
+              console.log('⚠️  Forcing NON-BYPASS mode to test validation logic');
+              console.log('⚠️  User permissions are being IGNORED for testing');
+              console.log('⚠️  This user will go through full validation');
+              console.log('⚠️  ============================================');
+              console.log('');
 
-              // Users with admin or maintain permissions can bypass
-              // These are typically members of platform-engineers, dotSysadmins, etc.
-              if (permissionLevel === 'admin' || permissionLevel === 'maintain') {
-                isTrusted = true;
-                matchedTeam = `repo-${permissionLevel}`;
-                console.log(`  ✅ User ${actor} has ${permissionLevel} permission - TRUSTED`);
-              } else {
-                console.log(`  ℹ️  User ${actor} has ${permissionLevel} permission - NOT TRUSTED`);
-                console.log(`  ℹ️  Only 'admin' or 'maintain' permissions grant bypass rights`);
+              isTrusted = false;
+              permissionLevel = 'testing-mode';
+              matchedTeam = 'testing-mode';
+            } else {
+              try {
+                console.log(`Checking permission level for ${actor}...`);
+                const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: org,
+                  repo: repo,
+                  username: actor
+                });
+
+                permissionLevel = permission.permission;
+                console.log(`  Permission level: ${permissionLevel}`);
+
+                // Users with admin or maintain permissions can bypass
+                // These are typically members of platform-engineers, dotSysadmins, etc.
+                if (permissionLevel === 'admin' || permissionLevel === 'maintain') {
+                  isTrusted = true;
+                  matchedTeam = `repo-${permissionLevel}`;
+                  console.log(`  ✅ User ${actor} has ${permissionLevel} permission - TRUSTED`);
+                } else {
+                  console.log(`  ℹ️  User ${actor} has ${permissionLevel} permission - NOT TRUSTED`);
+                  console.log(`  ℹ️  Only 'admin' or 'maintain' permissions grant bypass rights`);
+                }
+              } catch (error) {
+                console.log(`  ⚠️  Error checking permission: ${error.message}`);
+                console.log(`  ℹ️  Treating as non-trusted user`);
               }
-            } catch (error) {
-              console.log(`  ⚠️  Error checking permission: ${error.message}`);
-              console.log(`  ℹ️  Treating as non-trusted user`);
             }
 
             // Set outputs
