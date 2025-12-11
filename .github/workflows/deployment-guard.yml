@@ -4,9 +4,9 @@ name: Deployment Guard
 on:
   workflow_call:
     inputs:
-      # Team-based bypass configuration
-      trusted_github_teams:
-        description: 'Comma-separated list of GitHub team slugs that can bypass all validations (e.g., platform-engineers,dotSysadmins)'
+      # Organization-based bypass configuration
+      trusted_organization:
+        description: 'GitHub organization name whose PUBLIC members can bypass all validations (e.g., dotCMS)'
         required: false
         type: string
         default: ''
@@ -54,7 +54,7 @@ on:
 
       # Testing parameter
       testing_force_non_bypass:
-        description: 'TESTING ONLY: Force non-bypass mode to test validation logic (ignores actual permissions)'
+        description: 'TESTING ONLY: Force non-bypass mode to test validation logic (ignores organization membership)'
         required: false
         type: boolean
         default: false
@@ -64,120 +64,112 @@ permissions:
   pull-requests: write
 
 jobs:
-  check-team-membership:
-    name: Check Team Membership
+  check-org-membership:
+    name: Check Organization Membership
     runs-on: ubuntu-latest
     outputs:
-      is-team-member: ${{ steps.check.outputs.is_member }}
+      is-org-member: ${{ steps.check.outputs.is_member }}
       pr-author: ${{ steps.check.outputs.author }}
       should-bypass: ${{ steps.check.outputs.should_bypass }}
-      matched-team: ${{ steps.check.outputs.matched_team }}
+      organization: ${{ steps.check.outputs.organization }}
     steps:
-      - name: Check if PR author is in trusted teams
+      - name: Check if PR author is organization member
         id: check
         uses: actions/github-script@v7
         with:
           script: |
-            const trustedTeamsInput = '${{ inputs.trusted_github_teams }}';
-
-            // If no teams configured, don't bypass
-            if (!trustedTeamsInput) {
-              console.log('ℹ️  No trusted teams configured, running full validation');
-              core.setOutput('is_member', false);
-              core.setOutput('should_bypass', false);
-              core.setOutput('author', context.payload.pull_request.user.login);
-              core.setOutput('matched_team', '');
-              return;
-            }
-
+            const trustedOrg = '${{ inputs.trusted_organization }}';
             const actor = context.payload.pull_request.user.login;
-            const org = context.repo.owner;
-            const repo = context.repo.repo;
-
-            // Parse comma-separated list of teams
-            const trustedTeams = trustedTeamsInput.split(',').map(t => t.trim()).filter(t => t);
 
             core.setOutput('author', actor);
 
-            console.log(`Checking repository permissions for ${actor}...`);
-            console.log(`Trusted teams (for reference): ${trustedTeams.join(', ')}`);
+            // If no organization configured, don't bypass
+            if (!trustedOrg || trustedOrg.trim() === '') {
+              console.log('ℹ️  No trusted organization configured, running full validation');
+              core.setOutput('is_member', false);
+              core.setOutput('should_bypass', false);
+              core.setOutput('organization', '');
+              return;
+            }
+
             console.log('');
-            console.log('Note: Due to GitHub API limitations, we check repository permission level');
-            console.log('instead of direct team membership. Users with admin or maintain permissions');
-            console.log('can bypass validations (these permissions typically align with team membership).');
+            console.log('🔍 Checking organization membership...');
+            console.log(`   Organization: ${trustedOrg}`);
+            console.log(`   User: ${actor}`);
             console.log('');
 
-            // Check user's permission level in the repository
             let isTrusted = false;
-            let permissionLevel = 'none';
-            let matchedTeam = '';
 
             // TESTING MODE: Force non-bypass if testing parameter is enabled
             const testingForceNonBypass = '${{ inputs.testing_force_non_bypass }}' === 'true';
 
             if (testingForceNonBypass) {
-              console.log('');
               console.log('⚠️  ============================================');
               console.log('⚠️  TESTING MODE ENABLED');
               console.log('⚠️  ============================================');
               console.log('⚠️  Forcing NON-BYPASS mode to test validation logic');
-              console.log('⚠️  User permissions are being IGNORED for testing');
+              console.log('⚠️  Organization membership is being IGNORED for testing');
               console.log('⚠️  This user will go through full validation');
               console.log('⚠️  ============================================');
               console.log('');
 
               isTrusted = false;
-              permissionLevel = 'testing-mode';
-              matchedTeam = 'testing-mode';
+              core.setOutput('organization', 'testing-mode');
             } else {
               try {
-                console.log(`Checking permission level for ${actor}...`);
-                const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
-                  owner: org,
-                  repo: repo,
+                // Check if user is a PUBLIC member of the organization
+                await github.rest.orgs.checkPublicMembershipForUser({
+                  org: trustedOrg,
                   username: actor
                 });
 
-                permissionLevel = permission.permission;
-                console.log(`  Permission level: ${permissionLevel}`);
-
-                // Users with admin or maintain permissions can bypass
-                // These are typically members of platform-engineers, dotSysadmins, etc.
-                if (permissionLevel === 'admin' || permissionLevel === 'maintain') {
-                  isTrusted = true;
-                  matchedTeam = `repo-${permissionLevel}`;
-                  console.log(`  ✅ User ${actor} has ${permissionLevel} permission - TRUSTED`);
-                } else {
-                  console.log(`  ℹ️  User ${actor} has ${permissionLevel} permission - NOT TRUSTED`);
-                  console.log(`  ℹ️  Only 'admin' or 'maintain' permissions grant bypass rights`);
-                }
+                console.log(`✅ User ${actor} is a PUBLIC member of ${trustedOrg}`);
+                console.log('🚀 All validations will be BYPASSED');
+                isTrusted = true;
+                core.setOutput('organization', trustedOrg);
               } catch (error) {
-                console.log(`  ⚠️  Error checking permission: ${error.message}`);
-                console.log(`  ℹ️  Treating as non-trusted user`);
+                if (error.status === 404) {
+                  console.log(`❌ User ${actor} is NOT a public member of ${trustedOrg}`);
+                  console.log('');
+                  console.log('📋 TROUBLESHOOTING:');
+                  console.log('   If you are a member of the organization:');
+                  console.log(`   1. Visit https://github.com/orgs/${trustedOrg}/people`);
+                  console.log('   2. Find your username in the list');
+                  console.log('   3. Ensure your membership visibility is set to PUBLIC');
+                  console.log('   4. Click "Make public" if your membership is currently private');
+                  console.log('');
+                  console.log('   If you are not listed, contact an organization owner to be added.');
+                  console.log('');
+                  console.log('🔒 Full validation will be enforced');
+                } else {
+                  console.log(`⚠️  Error checking organization membership: ${error.message}`);
+                  console.log('ℹ️  Treating as non-member, full validation will be enforced');
+                }
+                isTrusted = false;
+                core.setOutput('organization', '');
               }
             }
 
             // Set outputs
             core.setOutput('is_member', isTrusted);
             core.setOutput('should_bypass', isTrusted);
-            core.setOutput('matched_team', matchedTeam);
 
             // Final result
             console.log('');
             if (isTrusted) {
-              console.log(`✅ RESULT: User ${actor} has ${permissionLevel} permission`);
-              console.log('🚀 ALL VALIDATIONS WILL BE BYPASSED - User is trusted based on repository permissions');
+              console.log(`✅ RESULT: User ${actor} is a trusted ${trustedOrg} organization member`);
+              console.log('🚀 ALL VALIDATIONS WILL BE BYPASSED');
             } else {
-              console.log(`ℹ️  RESULT: User ${actor} does not have sufficient permissions`);
-              console.log('🔒 Full validation will be enforced');
+              console.log(`ℹ️  RESULT: User ${actor} is not a public member of ${trustedOrg}`);
+              console.log('🔒 FULL VALIDATION WILL BE ENFORCED');
             }
   validate-changed-files:
     name: Validate Changed Files
     runs-on: ubuntu-latest
-    needs: check-team-membership
+    needs: check-org-membership
     if: |
       inputs.enable_file_allowlist &&
-      needs.check-team-membership.outputs.should-bypass == 'false'
+      needs.check-org-membership.outputs.should-bypass == 'false'
     outputs:
       allowed-files-check: ${{ steps.check-files.outputs.result }}
       changed-files: ${{ steps.get-files.outputs.files }}
@@ -256,11 +248,11 @@ jobs:
   validate-image-only-changed:
     name: Validate Only Image Changed
     runs-on: ubuntu-latest
-    needs: [check-team-membership, validate-changed-files]
+    needs: [check-org-membership, validate-changed-files]
     if: |
       always() &&
       inputs.enable_image_only_check &&
-      needs.check-team-membership.outputs.should-bypass == 'false' &&
+      needs.check-org-membership.outputs.should-bypass == 'false' &&
       (inputs.enable_file_allowlist == false || needs.validate-changed-files.outputs.allowed-files-check == 'pass')
     outputs:
       image-only-check: ${{ steps.check-changes.outputs.result }}
@@ -353,11 +345,11 @@ jobs:
   validate-images:
     name: Validate Images
     runs-on: ubuntu-latest
-    needs: [check-team-membership, validate-image-only-changed]
+    needs: [check-org-membership, validate-image-only-changed]
     if: |
       always() &&
       inputs.enable_image_validation &&
-      needs.check-team-membership.outputs.should-bypass == 'false' &&
+      needs.check-org-membership.outputs.should-bypass == 'false' &&
       (inputs.enable_image_only_check == false || needs.validate-image-only-changed.outputs.image-only-check == 'pass')
     outputs:
       image-validation: ${{ steps.validate.outputs.result }}
@@ -456,30 +448,30 @@ jobs:
   finalize:
     name: Final Status
     runs-on: ubuntu-latest
-    needs: [check-team-membership, validate-changed-files, validate-image-only-changed, validate-images]
+    needs: [check-org-membership, validate-changed-files, validate-image-only-changed, validate-images]
     if: always()
     steps:
       - name: Check all validations
         run: |
-          SHOULD_BYPASS="${{ needs.check-team-membership.outputs.should-bypass }}"
-          PR_AUTHOR="${{ needs.check-team-membership.outputs.pr-author }}"
-          MATCHED_TEAM="${{ needs.check-team-membership.outputs.matched-team }}"
+          SHOULD_BYPASS="${{ needs.check-org-membership.outputs.should-bypass }}"
+          PR_AUTHOR="${{ needs.check-org-membership.outputs.pr-author }}"
+          ORGANIZATION="${{ needs.check-org-membership.outputs.organization }}"
 
           echo "=================================================="
           echo "Deployment Guard - Validation Summary"
           echo "=================================================="
 
-          # Check if bypass is active (based on repository permissions)
+          # Check if bypass is active (based on organization membership)
           if [ "$SHOULD_BYPASS" = "true" ]; then
             echo "✅ VALIDATION BYPASSED"
             echo ""
             echo "PR Author: $PR_AUTHOR"
-            echo "Trusted User: YES"
-            echo "Permission Level: $MATCHED_TEAM"
+            echo "Trusted User: YES (${ORGANIZATION} organization member)"
+            echo "Organization: $ORGANIZATION"
             echo ""
-            echo "🚀 This PR author has elevated repository permissions."
+            echo "🚀 This PR author is a public member of the trusted organization."
             echo "   All validations have been bypassed."
-            echo "   Changes are approved based on trust in admins/maintainers."
+            echo "   Changes are approved based on organization membership."
             echo ""
             echo "=================================================="
             exit 0
@@ -572,35 +564,37 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const shouldBypass = '${{ needs.check-team-membership.outputs.should-bypass }}' === 'true';
-            const isTeamMember = '${{ needs.check-team-membership.outputs.is-team-member }}' === 'true';
-            const prAuthor = '${{ needs.check-team-membership.outputs.pr-author }}';
-            const matchedTeam = '${{ needs.check-team-membership.outputs.matched-team }}';
-            const trustedTeams = '${{ inputs.trusted_github_teams }}';
+            const shouldBypass = '${{ needs.check-org-membership.outputs.should-bypass }}' === 'true';
+            const isOrgMember = '${{ needs.check-org-membership.outputs.is-org-member }}' === 'true';
+            const prAuthor = '${{ needs.check-org-membership.outputs.pr-author }}';
+            const organization = '${{ needs.check-org-membership.outputs.organization }}';
+            const trustedOrg = '${{ inputs.trusted_organization }}';
 
             let commentBody = '## 🛡️ Deployment Guard Validation\n\n';
 
-            // Permission-based bypass status
+            // Organization membership-based bypass status
             commentBody += '### 👤 Author Verification\n';
-            if (shouldBypass && isTeamMember) {
+            if (shouldBypass && isOrgMember) {
               commentBody += `✅ **TRUSTED USER** - @${prAuthor}\n\n`;
-              commentBody += `- Permission Level: \`${matchedTeam}\`\n`;
-              if (trustedTeams) {
-                commentBody += `- Trusted teams (reference): \`${trustedTeams}\`\n`;
-              }
+              commentBody += `- Organization: \`${organization}\`\n`;
+              commentBody += `- Member Type: Public organization member\n`;
               commentBody += `- Status: 🚀 **All validations bypassed**\n`;
-              commentBody += `- Reason: Users with admin/maintain permissions are fully trusted\n\n`;
-              commentBody += '> **Note:** Due to GitHub API limitations, we verify repository permissions instead of direct team membership. ';
-              commentBody += 'Users with admin or maintain permissions can bypass validations. ';
-              commentBody += 'These permissions typically align with membership in trusted teams.\n\n';
+              commentBody += `- Reason: Members of ${organization} organization are fully trusted\n\n`;
+              commentBody += '> **Note:** Bypass is granted to PUBLIC members of the organization. ';
+              commentBody += `If you're a member but didn't get bypass, ensure your membership is public at https://github.com/orgs/${trustedOrg}/people\n\n`;
               commentBody += '---\n\n';
               commentBody += '### ✅ Validation Complete\n\n';
-              commentBody += 'This PR was automatically approved based on repository permissions.\n\n';
+              commentBody += 'This PR was automatically approved based on organization membership.\n\n';
               commentBody += 'No additional validation was required.\n';
             } else {
               commentBody += `ℹ️  **STANDARD USER** - @${prAuthor}\n\n`;
               commentBody += `- Status: 🔒 **Full validation enforced**\n`;
+              commentBody += `- Reason: Not a public member of ${trustedOrg} organization\n`;
               commentBody += `- All deployment rules must be satisfied\n\n`;
+              if (trustedOrg) {
+                commentBody += `> **Note:** To bypass validations, you must be a PUBLIC member of the ${trustedOrg} organization. `;
+                commentBody += `Visit https://github.com/orgs/${trustedOrg}/people to check your membership status.\n\n`;
+              }
 
               const filesCheck = '${{ needs.validate-changed-files.outputs.allowed-files-check }}';
               const imageOnlyCheck = '${{ needs.validate-image-only-changed.outputs.image-only-check }}';
