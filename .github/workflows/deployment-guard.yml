@@ -55,9 +55,6 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  # Required for checking team membership via GitHub API
-  # Note: This permission allows reading organization membership data
-  members: read
 
 jobs:
   check-team-membership:
@@ -88,59 +85,64 @@ jobs:
 
             const actor = context.payload.pull_request.user.login;
             const org = context.repo.owner;
+            const repo = context.repo.repo;
 
             // Parse comma-separated list of teams
             const trustedTeams = trustedTeamsInput.split(',').map(t => t.trim()).filter(t => t);
 
             core.setOutput('author', actor);
 
-            console.log(`Checking if ${actor} is a member of any trusted team...`);
-            console.log(`Trusted teams: ${trustedTeams.join(', ')}`);
+            console.log(`Checking repository permissions for ${actor}...`);
+            console.log(`Trusted teams (for reference): ${trustedTeams.join(', ')}`);
+            console.log('');
+            console.log('Note: Due to GitHub API limitations, we check repository permission level');
+            console.log('instead of direct team membership. Users with admin or maintain permissions');
+            console.log('can bypass validations (these permissions typically align with team membership).');
+            console.log('');
 
-            // Check membership in each team
-            let isMemberOfAny = false;
+            // Check user's permission level in the repository
+            let isTrusted = false;
+            let permissionLevel = 'none';
             let matchedTeam = '';
 
-            for (const team of trustedTeams) {
-              try {
-                console.log(`  Checking team: ${team}`);
-                const response = await github.rest.teams.getMembershipForUserInOrg({
-                  org: org,
-                  team_slug: team,
-                  username: actor
-                });
+            try {
+              console.log(`Checking permission level for ${actor}...`);
+              const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: org,
+                repo: repo,
+                username: actor
+              });
 
-                if (response.data.state === 'active') {
-                  isMemberOfAny = true;
-                  matchedTeam = team;
-                  console.log(`  ✅ User ${actor} is a member of ${team}`);
-                  break; // Found membership, no need to check other teams
-                } else {
-                  console.log(`  ℹ️  User ${actor} is not an active member of ${team}`);
-                }
-              } catch (error) {
-                if (error.status === 404) {
-                  console.log(`  ℹ️  User ${actor} is NOT a member of ${team} (or team does not exist)`);
-                } else {
-                  console.log(`  ⚠️  Error checking ${team}: ${error.message}`);
-                  // Don't throw - continue checking other teams
-                }
+              permissionLevel = permission.permission;
+              console.log(`  Permission level: ${permissionLevel}`);
+
+              // Users with admin or maintain permissions can bypass
+              // These are typically members of platform-engineers, dotSysadmins, etc.
+              if (permissionLevel === 'admin' || permissionLevel === 'maintain') {
+                isTrusted = true;
+                matchedTeam = `repo-${permissionLevel}`;
+                console.log(`  ✅ User ${actor} has ${permissionLevel} permission - TRUSTED`);
+              } else {
+                console.log(`  ℹ️  User ${actor} has ${permissionLevel} permission - NOT TRUSTED`);
+                console.log(`  ℹ️  Only 'admin' or 'maintain' permissions grant bypass rights`);
               }
+            } catch (error) {
+              console.log(`  ⚠️  Error checking permission: ${error.message}`);
+              console.log(`  ℹ️  Treating as non-trusted user`);
             }
 
             // Set outputs
-            core.setOutput('is_member', isMemberOfAny);
-            core.setOutput('should_bypass', isMemberOfAny);
+            core.setOutput('is_member', isTrusted);
+            core.setOutput('should_bypass', isTrusted);
             core.setOutput('matched_team', matchedTeam);
 
             // Final result
-            if (isMemberOfAny) {
-              console.log('');
-              console.log(`✅ RESULT: User ${actor} is a member of ${matchedTeam}`);
-              console.log('🚀 ALL VALIDATIONS WILL BE BYPASSED - Team member is fully trusted');
+            console.log('');
+            if (isTrusted) {
+              console.log(`✅ RESULT: User ${actor} has ${permissionLevel} permission`);
+              console.log('🚀 ALL VALIDATIONS WILL BE BYPASSED - User is trusted based on repository permissions');
             } else {
-              console.log('');
-              console.log(`ℹ️  RESULT: User ${actor} is NOT a member of any trusted team`);
+              console.log(`ℹ️  RESULT: User ${actor} does not have sufficient permissions`);
               console.log('🔒 Full validation will be enforced');
             }
   validate-changed-files:
@@ -441,17 +443,17 @@ jobs:
           echo "Deployment Guard - Validation Summary"
           echo "=================================================="
 
-          # Check if team member bypass is active
+          # Check if bypass is active (based on repository permissions)
           if [ "$SHOULD_BYPASS" = "true" ]; then
             echo "✅ VALIDATION BYPASSED"
             echo ""
             echo "PR Author: $PR_AUTHOR"
-            echo "Team Member: YES"
-            echo "Matched Team: $MATCHED_TEAM"
+            echo "Trusted User: YES"
+            echo "Permission Level: $MATCHED_TEAM"
             echo ""
-            echo "🚀 This PR author is a member of a trusted team."
+            echo "🚀 This PR author has elevated repository permissions."
             echo "   All validations have been bypassed."
-            echo "   Changes are approved based on team trust."
+            echo "   Changes are approved based on trust in admins/maintainers."
             echo ""
             echo "=================================================="
             exit 0
@@ -459,7 +461,7 @@ jobs:
 
           # If not bypassed, check validation results
           echo "PR Author: $PR_AUTHOR"
-          echo "Team Member: NO"
+          echo "Trusted User: NO"
           echo "Status: Running full validation"
           echo ""
 
@@ -552,22 +554,25 @@ jobs:
 
             let commentBody = '## 🛡️ Deployment Guard Validation\n\n';
 
-            // Team membership status
+            // Permission-based bypass status
             commentBody += '### 👤 Author Verification\n';
             if (shouldBypass && isTeamMember) {
-              commentBody += `✅ **TRUSTED TEAM MEMBER** - @${prAuthor}\n\n`;
-              commentBody += `- Member of: \`${matchedTeam}\`\n`;
+              commentBody += `✅ **TRUSTED USER** - @${prAuthor}\n\n`;
+              commentBody += `- Permission Level: \`${matchedTeam}\`\n`;
               if (trustedTeams) {
-                commentBody += `- Trusted teams: \`${trustedTeams}\`\n`;
+                commentBody += `- Trusted teams (reference): \`${trustedTeams}\`\n`;
               }
               commentBody += `- Status: 🚀 **All validations bypassed**\n`;
-              commentBody += `- Reason: Team members are fully trusted\n\n`;
+              commentBody += `- Reason: Users with admin/maintain permissions are fully trusted\n\n`;
+              commentBody += '> **Note:** Due to GitHub API limitations, we verify repository permissions instead of direct team membership. ';
+              commentBody += 'Users with admin or maintain permissions can bypass validations. ';
+              commentBody += 'These permissions typically align with membership in trusted teams.\n\n';
               commentBody += '---\n\n';
               commentBody += '### ✅ Validation Complete\n\n';
-              commentBody += 'This PR was automatically approved based on team membership.\n\n';
+              commentBody += 'This PR was automatically approved based on repository permissions.\n\n';
               commentBody += 'No additional validation was required.\n';
             } else {
-              commentBody += `ℹ️  **NON-TEAM MEMBER** - @${prAuthor}\n\n`;
+              commentBody += `ℹ️  **STANDARD USER** - @${prAuthor}\n\n`;
               commentBody += `- Status: 🔒 **Full validation enforced**\n`;
               commentBody += `- All deployment rules must be satisfied\n\n`;
 
