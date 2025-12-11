@@ -581,11 +581,7 @@ jobs:
               commentBody += `- Status: 🚀 **All validations bypassed**\n`;
               commentBody += `- Reason: Members of ${organization} organization are fully trusted\n\n`;
               commentBody += '> **Note:** Bypass is granted to PUBLIC members of the organization. ';
-              commentBody += `If you're a member but didn't get bypass, ensure your membership is public at https://github.com/orgs/${trustedOrg}/people\n\n`;
-              commentBody += '---\n\n';
-              commentBody += '### ✅ Validation Complete\n\n';
-              commentBody += 'This PR was automatically approved based on organization membership.\n\n';
-              commentBody += 'No additional validation was required.\n';
+              commentBody += `If you're a member but didn't get bypass, ensure your membership is public at https://github.com/orgs/${trustedOrg}/people\n`;
             } else {
               commentBody += `ℹ️  **STANDARD USER** - @${prAuthor}\n\n`;
               commentBody += `- Status: 🔒 **Full validation enforced**\n`;
