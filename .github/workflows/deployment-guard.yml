@@ -4,6 +4,13 @@ name: Deployment Guard
 on:
   workflow_call:
     inputs:
+      # Team-based bypass configuration
+      trusted_github_teams:
+        description: 'Comma-separated list of GitHub team slugs that can bypass all validations (e.g., platform-engineers,dotSysadmins)'
+        required: false
+        type: string
+        default: ''
+
       # Validation toggles - enable/disable specific checks
       enable_file_allowlist:
         description: 'Enable file allowlist validation'
@@ -46,10 +53,96 @@ on:
         default: false
 
 jobs:
+  check-team-membership:
+    name: Check Team Membership
+    runs-on: ubuntu-latest
+    outputs:
+      is-team-member: ${{ steps.check.outputs.is_member }}
+      pr-author: ${{ steps.check.outputs.author }}
+      should-bypass: ${{ steps.check.outputs.should_bypass }}
+      matched-team: ${{ steps.check.outputs.matched_team }}
+    steps:
+      - name: Check if PR author is in trusted teams
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const trustedTeamsInput = '${{ inputs.trusted_github_teams }}';
+
+            // If no teams configured, don't bypass
+            if (!trustedTeamsInput) {
+              console.log('ℹ️  No trusted teams configured, running full validation');
+              core.setOutput('is_member', false);
+              core.setOutput('should_bypass', false);
+              core.setOutput('author', context.payload.pull_request.user.login);
+              core.setOutput('matched_team', '');
+              return;
+            }
+
+            const actor = context.payload.pull_request.user.login;
+            const org = context.repo.owner;
+
+            // Parse comma-separated list of teams
+            const trustedTeams = trustedTeamsInput.split(',').map(t => t.trim()).filter(t => t);
+
+            core.setOutput('author', actor);
+
+            console.log(`Checking if ${actor} is a member of any trusted team...`);
+            console.log(`Trusted teams: ${trustedTeams.join(', ')}`);
+
+            // Check membership in each team
+            let isMemberOfAny = false;
+            let matchedTeam = '';
+
+            for (const team of trustedTeams) {
+              try {
+                console.log(`  Checking team: ${team}`);
+                const response = await github.rest.teams.getMembershipForUserInOrg({
+                  org: org,
+                  team_slug: team,
+                  username: actor
+                });
+
+                if (response.data.state === 'active') {
+                  isMemberOfAny = true;
+                  matchedTeam = team;
+                  console.log(`  ✅ User ${actor} is a member of ${team}`);
+                  break; // Found membership, no need to check other teams
+                } else {
+                  console.log(`  ℹ️  User ${actor} is not an active member of ${team}`);
+                }
+              } catch (error) {
+                if (error.status === 404) {
+                  console.log(`  ℹ️  User ${actor} is NOT a member of ${team} (or team does not exist)`);
+                } else {
+                  console.log(`  ⚠️  Error checking ${team}: ${error.message}`);
+                  // Don't throw - continue checking other teams
+                }
+              }
+            }
+
+            // Set outputs
+            core.setOutput('is_member', isMemberOfAny);
+            core.setOutput('should_bypass', isMemberOfAny);
+            core.setOutput('matched_team', matchedTeam);
+
+            // Final result
+            if (isMemberOfAny) {
+              console.log('');
+              console.log(`✅ RESULT: User ${actor} is a member of ${matchedTeam}`);
+              console.log('🚀 ALL VALIDATIONS WILL BE BYPASSED - Team member is fully trusted');
+            } else {
+              console.log('');
+              console.log(`ℹ️  RESULT: User ${actor} is NOT a member of any trusted team`);
+              console.log('🔒 Full validation will be enforced');
+            }
   validate-changed-files:
     name: Validate Changed Files
     runs-on: ubuntu-latest
-    if: ${{ inputs.enable_file_allowlist }}
+    needs: check-team-membership
+    if: |
+      inputs.enable_file_allowlist &&
+      needs.check-team-membership.outputs.should-bypass == 'false'
     outputs:
       allowed-files-check: ${{ steps.check-files.outputs.result }}
       changed-files: ${{ steps.get-files.outputs.files }}
@@ -128,10 +221,11 @@ jobs:
   validate-image-only-changed:
     name: Validate Only Image Changed
     runs-on: ubuntu-latest
-    needs: validate-changed-files
+    needs: [check-team-membership, validate-changed-files]
     if: |
       always() &&
       inputs.enable_image_only_check &&
+      needs.check-team-membership.outputs.should-bypass == 'false' &&
       (inputs.enable_file_allowlist == false || needs.validate-changed-files.outputs.allowed-files-check == 'pass')
     outputs:
       image-only-check: ${{ steps.check-changes.outputs.result }}
@@ -224,10 +318,11 @@ jobs:
   validate-images:
     name: Validate Images
     runs-on: ubuntu-latest
-    needs: validate-image-only-changed
+    needs: [check-team-membership, validate-image-only-changed]
     if: |
       always() &&
       inputs.enable_image_validation &&
+      needs.check-team-membership.outputs.should-bypass == 'false' &&
       (inputs.enable_image_only_check == false || needs.validate-image-only-changed.outputs.image-only-check == 'pass')
     outputs:
       image-validation: ${{ steps.validate.outputs.result }}
@@ -326,11 +421,41 @@ jobs:
   finalize:
     name: Final Status
     runs-on: ubuntu-latest
-    needs: [validate-changed-files, validate-image-only-changed, validate-images]
+    needs: [check-team-membership, validate-changed-files, validate-image-only-changed, validate-images]
     if: always()
     steps:
       - name: Check all validations
         run: |
+          SHOULD_BYPASS="${{ needs.check-team-membership.outputs.should-bypass }}"
+          PR_AUTHOR="${{ needs.check-team-membership.outputs.pr-author }}"
+          MATCHED_TEAM="${{ needs.check-team-membership.outputs.matched-team }}"
+
+          echo "=================================================="
+          echo "Deployment Guard - Validation Summary"
+          echo "=================================================="
+
+          # Check if team member bypass is active
+          if [ "$SHOULD_BYPASS" = "true" ]; then
+            echo "✅ VALIDATION BYPASSED"
+            echo ""
+            echo "PR Author: $PR_AUTHOR"
+            echo "Team Member: YES"
+            echo "Matched Team: $MATCHED_TEAM"
+            echo ""
+            echo "🚀 This PR author is a member of a trusted team."
+            echo "   All validations have been bypassed."
+            echo "   Changes are approved based on team trust."
+            echo ""
+            echo "=================================================="
+            exit 0
+          fi
+
+          # If not bypassed, check validation results
+          echo "PR Author: $PR_AUTHOR"
+          echo "Team Member: NO"
+          echo "Status: Running full validation"
+          echo ""
+
           FILES_CHECK="${{ needs.validate-changed-files.outputs.allowed-files-check }}"
           IMAGE_ONLY_CHECK="${{ needs.validate-image-only-changed.outputs.image-only-check }}"
           IMAGE_VALIDATION="${{ needs.validate-images.outputs.image-validation }}"
@@ -339,9 +464,6 @@ jobs:
           ENABLE_IMAGE_ONLY="${{ inputs.enable_image_only_check }}"
           ENABLE_IMAGE_VALIDATION="${{ inputs.enable_image_validation }}"
 
-          echo "=================================================="
-          echo "Validation Results Summary"
-          echo "=================================================="
           echo "Enabled checks:"
           echo "  - File allowlist: $ENABLE_FILE_ALLOWLIST"
           echo "  - Image-only changes: $ENABLE_IMAGE_ONLY"
@@ -415,57 +537,94 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const filesCheck = '${{ needs.validate-changed-files.outputs.allowed-files-check }}';
-            const imageOnlyCheck = '${{ needs.validate-image-only-changed.outputs.image-only-check }}';
-            const imageValidation = '${{ needs.validate-images.outputs.image-validation }}';
-            const newImages = JSON.parse('${{ needs.validate-image-only-changed.outputs.new-images }}');
+            const shouldBypass = '${{ needs.check-team-membership.outputs.should-bypass }}' === 'true';
+            const isTeamMember = '${{ needs.check-team-membership.outputs.is-team-member }}' === 'true';
+            const prAuthor = '${{ needs.check-team-membership.outputs.pr-author }}';
+            const matchedTeam = '${{ needs.check-team-membership.outputs.matched-team }}';
+            const trustedTeams = '${{ inputs.trusted_github_teams }}';
 
-            let commentBody = '## 🛡️ Deutsche Bank Deployment Validation\n\n';
+            let commentBody = '## 🛡️ Deployment Guard Validation\n\n';
 
-            // Files check
-            commentBody += '### 📁 File Allowlist Check\n';
-            if (filesCheck === 'pass') {
-              commentBody += '✅ **PASSED** - All modified files are in the allowlist\n\n';
-            } else {
-              commentBody += '❌ **FAILED** - Some files are not in the allowlist\n\n';
-              commentBody += `Only files matching \`${{ inputs.allowed_files_pattern }}\` can be modified.\n\n`;
-            }
-
-            // Image-only check
-            commentBody += '### 🔄 Image-Only Change Check\n';
-            if (imageOnlyCheck === 'pass') {
-              commentBody += '✅ **PASSED** - Only image field was modified\n\n';
-            } else {
-              commentBody += '❌ **FAILED** - Changes detected beyond image field\n\n';
-              commentBody += 'Only the dotCMS container image can be modified. No other fields are allowed.\n\n';
-            }
-
-            // Image validation
-            commentBody += '### 🐳 Image Validation\n';
-            if (imageValidation === 'pass') {
-              commentBody += '✅ **PASSED** - All images validated successfully\n\n';
-              if (newImages.length > 0) {
-                commentBody += '**Validated images:**\n';
-                newImages.forEach(img => {
-                  commentBody += `- \`${img}\`\n`;
-                });
+            // Team membership status
+            commentBody += '### 👤 Author Verification\n';
+            if (shouldBypass && isTeamMember) {
+              commentBody += `✅ **TRUSTED TEAM MEMBER** - @${prAuthor}\n\n`;
+              commentBody += `- Member of: \`${matchedTeam}\`\n`;
+              if (trustedTeams) {
+                commentBody += `- Trusted teams: \`${trustedTeams}\`\n`;
               }
+              commentBody += `- Status: 🚀 **All validations bypassed**\n`;
+              commentBody += `- Reason: Team members are fully trusted\n\n`;
+              commentBody += '---\n\n';
+              commentBody += '### ✅ Validation Complete\n\n';
+              commentBody += 'This PR was automatically approved based on team membership.\n\n';
+              commentBody += 'No additional validation was required.\n';
             } else {
-              commentBody += '❌ **FAILED** - Image validation failed\n\n';
-              commentBody += `**Requirements:**\n`;
-              commentBody += `- Repository must be: \`${{ inputs.allowed_image_repositories }}\`\n`;
-              commentBody += `- Tag must match pattern: \`${{ inputs.allowed_version_pattern }}\`\n`;
-              commentBody += `- Image must exist in the registry\n\n`;
-            }
+              commentBody += `ℹ️  **NON-TEAM MEMBER** - @${prAuthor}\n\n`;
+              commentBody += `- Status: 🔒 **Full validation enforced**\n`;
+              commentBody += `- All deployment rules must be satisfied\n\n`;
 
-            // Final status
-            commentBody += '\n---\n\n';
-            if (filesCheck === 'pass' && imageOnlyCheck === 'pass' && imageValidation === 'pass') {
-              commentBody += '### ✅ All validations passed!\n\n';
-              commentBody += 'This PR is approved to merge (subject to standard review process).\n';
-            } else {
-              commentBody += '### ❌ Validation failed\n\n';
-              commentBody += 'Please address the issues above and push new commits to re-trigger validation.\n';
+              const filesCheck = '${{ needs.validate-changed-files.outputs.allowed-files-check }}';
+              const imageOnlyCheck = '${{ needs.validate-image-only-changed.outputs.image-only-check }}';
+              const imageValidation = '${{ needs.validate-images.outputs.image-validation }}';
+              const newImages = JSON.parse('${{ needs.validate-image-only-changed.outputs.new-images }}' || '[]');
+
+              // Files check
+              commentBody += '### 📁 File Allowlist Check\n';
+              if (filesCheck === 'pass') {
+                commentBody += '✅ **PASSED** - All modified files are in the allowlist\n\n';
+              } else if (filesCheck === 'fail') {
+                commentBody += '❌ **FAILED** - Some files are not in the allowlist\n\n';
+                commentBody += `Only files matching \`${{ inputs.allowed_files_pattern }}\` can be modified.\n\n`;
+              } else {
+                commentBody += 'ℹ️  **SKIPPED** - File allowlist check not enabled\n\n';
+              }
+
+              // Image-only check
+              commentBody += '### 🔄 Image-Only Change Check\n';
+              if (imageOnlyCheck === 'pass') {
+                commentBody += '✅ **PASSED** - Only image field was modified\n\n';
+              } else if (imageOnlyCheck === 'fail') {
+                commentBody += '❌ **FAILED** - Changes detected beyond image field\n\n';
+                commentBody += 'Only the dotCMS container image can be modified. No other fields are allowed.\n\n';
+              } else {
+                commentBody += 'ℹ️  **SKIPPED** - Image-only check not enabled\n\n';
+              }
+
+              // Image validation
+              commentBody += '### 🐳 Image Validation\n';
+              if (imageValidation === 'pass') {
+                commentBody += '✅ **PASSED** - All images validated successfully\n\n';
+                if (newImages.length > 0) {
+                  commentBody += '**Validated images:**\n';
+                  newImages.forEach(img => {
+                    commentBody += `- \`${img}\`\n`;
+                  });
+                }
+              } else if (imageValidation === 'fail') {
+                commentBody += '❌ **FAILED** - Image validation failed\n\n';
+                commentBody += `**Requirements:**\n`;
+                if ('${{ inputs.allowed_image_repositories }}') {
+                  commentBody += `- Repository must be: \`${{ inputs.allowed_image_repositories }}\`\n`;
+                }
+                commentBody += `- Tag must match pattern: \`${{ inputs.allowed_version_pattern }}\`\n`;
+                if ('${{ inputs.verify_image_existence }}' === 'true') {
+                  commentBody += `- Image must exist in the registry\n`;
+                }
+                commentBody += '\n';
+              } else {
+                commentBody += 'ℹ️  **SKIPPED** - Image validation not enabled\n\n';
+              }
+
+              // Final status
+              commentBody += '\n---\n\n';
+              if (filesCheck === 'pass' && imageOnlyCheck === 'pass' && imageValidation === 'pass') {
+                commentBody += '### ✅ All validations passed!\n\n';
+                commentBody += 'This PR meets all deployment requirements.\n';
+              } else {
+                commentBody += '### ❌ Validation failed\n\n';
+                commentBody += 'Please address the issues above and push new commits to re-trigger validation.\n';
+              }
             }
 
             // Post comment
