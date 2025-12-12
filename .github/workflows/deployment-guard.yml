@@ -258,6 +258,7 @@ jobs:
     outputs:
       image-only-check: ${{ steps.check-changes.outputs.result }}
       new-images: ${{ steps.check-changes.outputs.images }}
+      old-images: ${{ steps.check-changes.outputs.old-images }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -324,6 +325,7 @@ jobs:
             else
               echo "✅ Only image changed: $OLD_IMAGE → $NEW_IMAGE"
               echo "$NEW_IMAGE" >> /tmp/new_images.txt
+              echo "$OLD_IMAGE" >> /tmp/old_images.txt
             fi
             echo ""
           done
@@ -331,6 +333,7 @@ jobs:
           if [ -f /tmp/validation_failed.txt ]; then
             echo "result=fail" >> "$GITHUB_OUTPUT"
             echo "images=[]" >> "$GITHUB_OUTPUT"
+            echo "old-images=[]" >> "$GITHUB_OUTPUT"
             exit 1
           else
             if [ -f /tmp/new_images.txt ]; then
@@ -339,6 +342,14 @@ jobs:
             else
               echo "images=[]" >> "$GITHUB_OUTPUT"
             fi
+
+            if [ -f /tmp/old_images.txt ]; then
+              OLD_IMAGES_JSON=$(jq -R -s -c 'split("\n") | map(select(length > 0)) | unique' < /tmp/old_images.txt)
+              echo "old-images=$OLD_IMAGES_JSON" >> "$GITHUB_OUTPUT"
+            else
+              echo "old-images=[]" >> "$GITHUB_OUTPUT"
+            fi
+
             echo "result=pass" >> "$GITHUB_OUTPUT"
             echo "✅ All files have only image field changes"
           fi
@@ -359,6 +370,7 @@ jobs:
         id: validate
         run: |
           NEW_IMAGES='${{ needs.validate-image-only-changed.outputs.new-images }}'
+          OLD_IMAGES='${{ needs.validate-image-only-changed.outputs.old-images }}'
           ALLOWED_REPOS='${{ inputs.allowed_image_repositories }}'
           VERSION_PATTERN='${{ inputs.allowed_version_pattern }}'
           VERIFY_EXISTENCE='${{ inputs.verify_image_existence }}'
@@ -369,6 +381,11 @@ jobs:
             exit 0
           fi
 
+          # Create associative array to map new images to old images by index
+          NEW_IMAGES_ARRAY=($(echo "$NEW_IMAGES" | jq -r '.[]'))
+          OLD_IMAGES_ARRAY=($(echo "$OLD_IMAGES" | jq -r '.[]'))
+
+          INDEX=0
           echo "$NEW_IMAGES" | jq -r '.[]' | while IFS= read -r image; do
             echo "=================================================="
             echo "Validating image: $image"
@@ -449,15 +466,63 @@ jobs:
             fi
             echo "✅ Tag matches version pattern"
 
-            # 5. Verify image exists in registry (optional)
+            # 4.5. Anti-downgrade validation (compare versions)
+            # Get the corresponding old image by index
+            OLD_IMAGE="${OLD_IMAGES_ARRAY[$INDEX]}"
+            if [ -n "$OLD_IMAGE" ]; then
+              # Extract old tag
+              OLD_TAG="${OLD_IMAGE##*:}"
+              echo ""
+              echo "Checking for downgrades..."
+              echo "   Old tag: $OLD_TAG"
+              echo "   New tag: $TAG"
+
+              # Remove optional suffix (-1, -2, etc) for version comparison
+              OLD_VERSION="${OLD_TAG%%-*}"
+              NEW_VERSION="${TAG%%-*}"
+
+              # Compare versions (YY.MM.DD format)
+              # Convert to comparable format: YYMMDD
+              OLD_VER_NUM=$(echo "$OLD_VERSION" | tr -d '.')
+              NEW_VER_NUM=$(echo "$NEW_VERSION" | tr -d '.')
+
+              if [ "$NEW_VER_NUM" -lt "$OLD_VER_NUM" ]; then
+                echo "❌ Downgrade detected"
+                echo "   Old version: $OLD_VERSION"
+                echo "   New version: $NEW_VERSION"
+                echo "   REASON: Downgrades are not permitted (new version must be >= old version)"
+                echo "false" > /tmp/validation_failed.txt
+                continue
+              elif [ "$NEW_VER_NUM" -eq "$OLD_VER_NUM" ]; then
+                echo "✅ Same version (suffix may differ): $OLD_VERSION → $NEW_VERSION"
+              else
+                echo "✅ Version upgrade: $OLD_VERSION → $NEW_VERSION"
+              fi
+            else
+              echo "ℹ️  No old image found for comparison (new deployment or first validation)"
+            fi
+
+            # Increment index for next iteration
+            ((INDEX++))
+
+            # 5. Verify image exists in Docker Hub (canonical registry)
             if [ "$VERIFY_EXISTENCE" = "true" ]; then
-              echo "Verifying image exists in registry..."
-              if docker manifest inspect "$image" >/dev/null 2>&1; then
-                echo "✅ Image exists in registry"
+              # Use canonical image (without registry prefix) to verify in Docker Hub
+              # This assumes mirror registries have the same images as Docker Hub
+              CANONICAL_IMAGE="${BASE_REPO}:${TAG}"
+
+              echo "Verifying image exists in Docker Hub (canonical)..."
+              echo "   Canonical image: $CANONICAL_IMAGE"
+
+              if docker manifest inspect "$CANONICAL_IMAGE" >/dev/null 2>&1; then
+                echo "✅ Image exists in Docker Hub"
+                if [ "$REPO" != "$BASE_REPO" ]; then
+                  echo "   Note: Assuming mirror registry ($REPO) has the same image"
+                fi
               else
                 echo "❌ Registry existence validation failed"
-                echo "   Image: $image"
-                echo "   REASON: Image does not exist in the Docker registry"
+                echo "   Canonical image: $CANONICAL_IMAGE"
+                echo "   REASON: Image does not exist in Docker Hub"
                 echo "false" > /tmp/validation_failed.txt
                 continue
               fi
