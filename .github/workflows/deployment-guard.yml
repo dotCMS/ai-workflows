@@ -430,14 +430,10 @@ jobs:
                 #   dotcms/dotcms -> dotcms/dotcms
                 BASE_REPO="$REPO"
                 if [[ "$REPO" =~ / ]]; then
-                  # If REPO contains registry (has multiple slashes or starts with known registries)
-                  if [[ "$REPO" =~ ^[a-z0-9.-]+\.[a-z]{2,}/.*/ ]] || [[ "$REPO" =~ ^gcr\.io/ ]] || [[ "$REPO" =~ ^.*\.gcr\.io/ ]]; then
-                    # Extract everything after the registry domain
+                  # Check if REPO starts with a registry domain
+                  if [[ "$REPO" =~ ^[a-z0-9.-]+\.[a-z]{2,}/ ]] || [[ "$REPO" =~ ^gcr\.io/ ]] || [[ "$REPO" =~ ^.*\.gcr\.io/ ]]; then
+                    # Extract everything after the first slash (removes registry domain)
                     BASE_REPO="${REPO#*/}"
-                    # If there are still slashes, get the last two parts (org/repo)
-                    if [[ "$BASE_REPO" =~ / ]]; then
-                      BASE_REPO="${BASE_REPO#*/}"
-                    fi
                   fi
                 fi
 
