@@ -399,7 +399,7 @@ jobs:
             echo "=================================================="
 
             # 1. Validate format (repo/name:tag)
-            if ! [[ "$image" =~ ^[a-zA-Z0-9_/-]+:[a-zA-Z0-9._-]+$ ]]; then
+            if ! [[ "$image" =~ ^[a-zA-Z0-9/_.-]+:[a-zA-Z0-9_.-]+$ ]]; then
               echo "❌ Image format validation failed"
               echo "   Image: $image"
               echo "   REASON: Invalid image format (expected format: repository/name:tag)"
