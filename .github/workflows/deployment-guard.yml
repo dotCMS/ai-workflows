@@ -467,7 +467,8 @@ jobs:
               echo "❌ Version pattern validation failed"
               echo "   Tag: $TAG"
               echo "   Required pattern: $VERSION_PATTERN"
-              echo "   REASON: Only evergreen date-based versions are allowed (YY.MM.DD where YY >= 25, with optional suffix)"
+              echo "   REASON: Only evergreen date-based versions are allowed"
+              echo "   Accepted formats: YY.MM.DD, YY.MM.DD-N, YY.MM.DD_hash, YY.MM.DD-N_hash (where YY >= 25)"
               echo "false" > /tmp/validation_failed.txt
               continue
             fi
@@ -484,9 +485,15 @@ jobs:
               echo "   Old tag: $OLD_TAG"
               echo "   New tag: $TAG"
 
-              # Remove optional suffix (-1, -2, etc) for version comparison
-              OLD_VERSION="${OLD_TAG%%-*}"
-              NEW_VERSION="${TAG%%-*}"
+              # Extract base version for comparison
+              # Handle formats: YY.MM.DD, YY.MM.DD-N, YY.MM.DD_hash, YY.MM.DD-N_hash
+              # First remove hash (everything after underscore)
+              OLD_VERSION_NO_HASH="${OLD_TAG%%_*}"
+              NEW_VERSION_NO_HASH="${TAG%%_*}"
+
+              # Then remove rebuild number (everything after first dash)
+              OLD_VERSION="${OLD_VERSION_NO_HASH%%-*}"
+              NEW_VERSION="${NEW_VERSION_NO_HASH%%-*}"
 
               # Compare versions (YY.MM.DD format)
               # Convert to comparable format: YYMMDD
@@ -646,7 +653,7 @@ jobs:
               echo "  - Repository: Only images from '${{ inputs.allowed_image_repositories }}' are allowed"
             fi
             echo "  - Version format: Must match pattern '${{ inputs.allowed_version_pattern }}'"
-            echo "    (Evergreen date-based versions only: YY.MM.DD where YY >= 25, with optional suffix)"
+            echo "    (Evergreen date-based versions only: YY.MM.DD, YY.MM.DD-N, YY.MM.DD_hash, YY.MM.DD-N_hash where YY >= 25)"
             if [ "${{ inputs.verify_image_existence }}" = "true" ]; then
               echo "  - Registry existence: Image must exist in the Docker registry"
             fi
