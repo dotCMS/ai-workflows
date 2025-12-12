@@ -376,7 +376,9 @@ jobs:
 
             # 1. Validate format (repo/name:tag)
             if ! [[ "$image" =~ ^[a-zA-Z0-9_/-]+:[a-zA-Z0-9._-]+$ ]]; then
-              echo "❌ Invalid image format: $image"
+              echo "❌ Image format validation failed"
+              echo "   Image: $image"
+              echo "   REASON: Invalid image format (expected format: repository/name:tag)"
               echo "false" > /tmp/validation_failed.txt
               continue
             fi
@@ -385,6 +387,7 @@ jobs:
             # 2. Extract repository and tag
             REPO="${image%:*}"
             TAG="${image##*:}"
+            echo "   Full image: $image"
             echo "   Repository: $REPO"
             echo "   Tag: $TAG"
 
@@ -395,14 +398,37 @@ jobs:
               for allowed_repo in "${ALLOWED[@]}"; do
                 # Trim whitespace
                 allowed_repo=$(echo "$allowed_repo" | xargs)
-                if [[ "$REPO" == "$allowed_repo" ]]; then
+
+                # Extract base repository name (handle both with and without registry prefix)
+                # Examples:
+                #   mirror.gcr.io/dotcms/dotcms -> dotcms/dotcms
+                #   gcr.io/project/dotcms/dotcms -> dotcms/dotcms
+                #   dotcms/dotcms -> dotcms/dotcms
+                BASE_REPO="$REPO"
+                if [[ "$REPO" =~ / ]]; then
+                  # If REPO contains registry (has multiple slashes or starts with known registries)
+                  if [[ "$REPO" =~ ^[a-z0-9.-]+\.[a-z]{2,}/.*/ ]] || [[ "$REPO" =~ ^gcr\.io/ ]] || [[ "$REPO" =~ ^.*\.gcr\.io/ ]]; then
+                    # Extract everything after the registry domain
+                    BASE_REPO="${REPO#*/}"
+                    # If there are still slashes, get the last two parts (org/repo)
+                    if [[ "$BASE_REPO" =~ / ]]; then
+                      BASE_REPO="${BASE_REPO#*/}"
+                    fi
+                  fi
+                fi
+
+                echo "   Comparing '$BASE_REPO' with allowed '$allowed_repo'"
+                if [[ "$BASE_REPO" == "$allowed_repo" ]] || [[ "$REPO" == "$allowed_repo" ]]; then
                   REPO_ALLOWED=true
+                  echo "   ✓ Match found"
                   break
                 fi
               done
 
               if [ "$REPO_ALLOWED" = false ]; then
-                echo "❌ Repository not allowed: $REPO"
+                echo "❌ Repository validation failed"
+                echo "   Repository: $REPO"
+                echo "   REASON: Repository is not in the allowlist"
                 echo "   Allowed repositories: $ALLOWED_REPOS"
                 echo "false" > /tmp/validation_failed.txt
                 continue
@@ -414,9 +440,10 @@ jobs:
 
             # 4. Validate tag matches version pattern
             if ! [[ "$TAG" =~ $VERSION_PATTERN ]]; then
-              echo "❌ Tag does not match version pattern: $TAG"
-              echo "   Expected pattern: $VERSION_PATTERN"
-              echo "   This typically means: date-based versions YY.MM.DD where YY >= 25"
+              echo "❌ Version pattern validation failed"
+              echo "   Tag: $TAG"
+              echo "   Required pattern: $VERSION_PATTERN"
+              echo "   REASON: Only evergreen date-based versions are allowed (YY.MM.DD where YY >= 25, with optional suffix)"
               echo "false" > /tmp/validation_failed.txt
               continue
             fi
@@ -428,7 +455,9 @@ jobs:
               if docker manifest inspect "$image" >/dev/null 2>&1; then
                 echo "✅ Image exists in registry"
               else
-                echo "❌ Image does not exist in registry: $image"
+                echo "❌ Registry existence validation failed"
+                echo "   Image: $image"
+                echo "   REASON: Image does not exist in the Docker registry"
                 echo "false" > /tmp/validation_failed.txt
                 continue
               fi
@@ -511,23 +540,26 @@ jobs:
 
           # Check file allowlist (if enabled)
           if [ "$ENABLE_FILE_ALLOWLIST" = "true" ] && [ "$FILES_CHECK" != "pass" ]; then
-            echo "❌ BLOCKED: Modified files are not in the allowlist"
+            echo "❌ BLOCKED: File allowlist validation failed"
             echo ""
-            echo "Only the following files can be modified:"
-            echo "  - ${{ inputs.allowed_files_pattern }}"
+            echo "REASON: One or more modified files are not in the allowlist"
             echo ""
-            echo "Please ensure you're only modifying allowed files."
+            echo "Validation Rule: Only files matching the following pattern can be modified:"
+            echo "  - Pattern: ${{ inputs.allowed_files_pattern }}"
+            echo ""
             exit 1
           fi
 
           # Check image-only changes (if enabled)
           if [ "$ENABLE_IMAGE_ONLY" = "true" ] && [ "$IMAGE_ONLY_CHECK" != "pass" ]; then
-            echo "❌ BLOCKED: Changes detected beyond the image field"
+            echo "❌ BLOCKED: Image-only validation failed"
             echo ""
-            echo "Only the container image field can be modified."
-            echo "No other changes are allowed (resources, env vars, volumes, etc.)"
+            echo "REASON: Changes detected beyond the container image field"
             echo ""
-            echo "Please revert any non-image changes and try again."
+            echo "Validation Rule: Only the container image attribute can be modified"
+            echo "  - Allowed: Changes to container image field only"
+            echo "  - Not allowed: resources, env vars, volumes, replicas, or any other configuration changes"
+            echo ""
             exit 1
           fi
 
@@ -535,16 +567,19 @@ jobs:
           if [ "$ENABLE_IMAGE_VALIDATION" = "true" ] && [ "$IMAGE_VALIDATION" != "pass" ]; then
             echo "❌ BLOCKED: Image validation failed"
             echo ""
-            echo "Image validation requirements:"
-            if [ -n "${{ inputs.allowed_image_repositories }}" ]; then
-              echo "  - Repository must be: ${{ inputs.allowed_image_repositories }}"
-            fi
-            echo "  - Tag must match pattern: ${{ inputs.allowed_version_pattern }}"
-            if [ "${{ inputs.verify_image_existence }}" = "true" ]; then
-              echo "  - Image must exist in the registry"
-            fi
+            echo "REASON: The specified image does not meet one or more validation requirements"
             echo ""
-            echo "Please use a valid image and try again."
+            echo "Validation Rules:"
+            if [ -n "${{ inputs.allowed_image_repositories }}" ]; then
+              echo "  - Repository: Only images from '${{ inputs.allowed_image_repositories }}' are allowed"
+            fi
+            echo "  - Version format: Must match pattern '${{ inputs.allowed_version_pattern }}'"
+            echo "    (Evergreen date-based versions only: YY.MM.DD where YY >= 25, with optional suffix)"
+            if [ "${{ inputs.verify_image_existence }}" = "true" ]; then
+              echo "  - Registry existence: Image must exist in the Docker registry"
+            fi
+            echo "  - No downgrades: Version must be equal to or newer than the current deployed version"
+            echo ""
             exit 1
           fi
 
