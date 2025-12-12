@@ -286,7 +286,8 @@ jobs:
 
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
 
-          echo "$CHANGED_FILES" | jq -r '.[]' | while IFS= read -r file; do
+          # Use process substitution to avoid subshell issues with pipe
+          while IFS= read -r file; do
             echo "=================================================="
             echo "Validating: $file"
             echo "=================================================="
@@ -330,7 +331,7 @@ jobs:
               echo "$OLD_IMAGE" >> /tmp/old_images.txt
             fi
             echo ""
-          done
+          done < <(echo "$CHANGED_FILES" | jq -r '.[]')
 
           if [ -f /tmp/validation_failed.txt ]; then
             {
