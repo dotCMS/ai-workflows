@@ -336,21 +336,24 @@ jobs:
             echo "old-images=[]" >> "$GITHUB_OUTPUT"
             exit 1
           else
-            if [ -f /tmp/new_images.txt ]; then
-              IMAGES_JSON=$(jq -R -s -c 'split("\n") | map(select(length > 0)) | unique' < /tmp/new_images.txt)
-              echo "images=$IMAGES_JSON" >> "$GITHUB_OUTPUT"
-            else
-              echo "images=[]" >> "$GITHUB_OUTPUT"
-            fi
+            # Use block redirect to satisfy shellcheck SC2129
+            {
+              if [ -f /tmp/new_images.txt ]; then
+                IMAGES_JSON=$(jq -R -s -c 'split("\n") | map(select(length > 0)) | unique' < /tmp/new_images.txt)
+                echo "images=$IMAGES_JSON"
+              else
+                echo "images=[]"
+              fi
 
-            if [ -f /tmp/old_images.txt ]; then
-              OLD_IMAGES_JSON=$(jq -R -s -c 'split("\n") | map(select(length > 0)) | unique' < /tmp/old_images.txt)
-              echo "old-images=$OLD_IMAGES_JSON" >> "$GITHUB_OUTPUT"
-            else
-              echo "old-images=[]" >> "$GITHUB_OUTPUT"
-            fi
+              if [ -f /tmp/old_images.txt ]; then
+                OLD_IMAGES_JSON=$(jq -R -s -c 'split("\n") | map(select(length > 0)) | unique' < /tmp/old_images.txt)
+                echo "old-images=$OLD_IMAGES_JSON"
+              else
+                echo "old-images=[]"
+              fi
 
-            echo "result=pass" >> "$GITHUB_OUTPUT"
+              echo "result=pass"
+            } >> "$GITHUB_OUTPUT"
             echo "✅ All files have only image field changes"
           fi
 
@@ -381,9 +384,9 @@ jobs:
             exit 0
           fi
 
-          # Create associative array to map new images to old images by index
-          NEW_IMAGES_ARRAY=($(echo "$NEW_IMAGES" | jq -r '.[]'))
-          OLD_IMAGES_ARRAY=($(echo "$OLD_IMAGES" | jq -r '.[]'))
+          # Create arrays to map new images to old images by index
+          # Using mapfile to satisfy shellcheck SC2207
+          mapfile -t OLD_IMAGES_ARRAY < <(echo "$OLD_IMAGES" | jq -r '.[]')
 
           INDEX=0
           echo "$NEW_IMAGES" | jq -r '.[]' | while IFS= read -r image; do
