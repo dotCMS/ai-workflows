@@ -393,7 +393,8 @@ jobs:
           mapfile -t OLD_IMAGES_ARRAY < <(echo "$OLD_IMAGES" | jq -r '.[]')
 
           INDEX=0
-          echo "$NEW_IMAGES" | jq -r '.[]' | while IFS= read -r image; do
+          # Use process substitution to avoid subshell issues with pipe
+          while IFS= read -r image; do
             echo "=================================================="
             echo "Validating image: $image"
             echo "=================================================="
@@ -540,7 +541,7 @@ jobs:
 
             echo "✅ Image validated successfully: $image"
             echo ""
-          done
+          done < <(echo "$NEW_IMAGES" | jq -r '.[]')
 
           if [ -f /tmp/validation_failed.txt ]; then
             echo "result=fail" >> "$GITHUB_OUTPUT"
