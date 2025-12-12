@@ -277,8 +277,10 @@ jobs:
 
           if [ "$CHANGED_FILES" = "" ] || [ "$CHANGED_FILES" = "[]" ]; then
             echo "No files to validate"
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-            echo "images=[]" >> "$GITHUB_OUTPUT"
+            {
+              echo "result=pass"
+              echo "images=[]"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -331,9 +333,11 @@ jobs:
           done
 
           if [ -f /tmp/validation_failed.txt ]; then
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "images=[]" >> "$GITHUB_OUTPUT"
-            echo "old-images=[]" >> "$GITHUB_OUTPUT"
+            {
+              echo "result=fail"
+              echo "images=[]"
+              echo "old-images=[]"
+            } >> "$GITHUB_OUTPUT"
             exit 1
           else
             # Use block redirect to satisfy shellcheck SC2129
