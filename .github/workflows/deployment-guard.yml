@@ -417,27 +417,29 @@ jobs:
             echo "   Repository: $REPO"
             echo "   Tag: $TAG"
 
-            # 3. Check repository is in allowlist (if configured)
+            # 3. Extract base repository name (handle both with and without registry prefix)
+            # This is needed for both repository validation and image existence check
+            # Examples:
+            #   mirror.gcr.io/dotcms/dotcms -> dotcms/dotcms
+            #   gcr.io/project/dotcms/dotcms -> dotcms/dotcms
+            #   dotcms/dotcms -> dotcms/dotcms
+            BASE_REPO="$REPO"
+            if [[ "$REPO" =~ / ]]; then
+              # Check if REPO starts with a registry domain
+              if [[ "$REPO" =~ ^[a-z0-9.-]+\.[a-z]{2,}/ ]] || [[ "$REPO" =~ ^gcr\.io/ ]] || [[ "$REPO" =~ ^.*\.gcr\.io/ ]]; then
+                # Extract everything after the first slash (removes registry domain)
+                BASE_REPO="${REPO#*/}"
+              fi
+            fi
+            echo "   Base repository: $BASE_REPO"
+
+            # 4. Check repository is in allowlist (if configured)
             if [ -n "$ALLOWED_REPOS" ]; then
               REPO_ALLOWED=false
               IFS=',' read -ra ALLOWED <<< "$ALLOWED_REPOS"
               for allowed_repo in "${ALLOWED[@]}"; do
                 # Trim whitespace
                 allowed_repo=$(echo "$allowed_repo" | xargs)
-
-                # Extract base repository name (handle both with and without registry prefix)
-                # Examples:
-                #   mirror.gcr.io/dotcms/dotcms -> dotcms/dotcms
-                #   gcr.io/project/dotcms/dotcms -> dotcms/dotcms
-                #   dotcms/dotcms -> dotcms/dotcms
-                BASE_REPO="$REPO"
-                if [[ "$REPO" =~ / ]]; then
-                  # Check if REPO starts with a registry domain
-                  if [[ "$REPO" =~ ^[a-z0-9.-]+\.[a-z]{2,}/ ]] || [[ "$REPO" =~ ^gcr\.io/ ]] || [[ "$REPO" =~ ^.*\.gcr\.io/ ]]; then
-                    # Extract everything after the first slash (removes registry domain)
-                    BASE_REPO="${REPO#*/}"
-                  fi
-                fi
 
                 echo "   Comparing '$BASE_REPO' with allowed '$allowed_repo'"
                 if [[ "$BASE_REPO" == "$allowed_repo" ]] || [[ "$REPO" == "$allowed_repo" ]]; then
@@ -460,7 +462,7 @@ jobs:
               echo "ℹ️  Repository validation skipped (no allowlist configured)"
             fi
 
-            # 4. Validate tag matches version pattern
+            # 5. Validate tag matches version pattern
             if ! [[ "$TAG" =~ $VERSION_PATTERN ]]; then
               echo "❌ Version pattern validation failed"
               echo "   Tag: $TAG"
@@ -472,7 +474,7 @@ jobs:
             fi
             echo "✅ Tag matches version pattern"
 
-            # 4.5. Anti-downgrade validation (compare versions)
+            # 6. Anti-downgrade validation (compare versions)
             # Get the corresponding old image by index
             OLD_IMAGE="${OLD_IMAGES_ARRAY[$INDEX]}"
             if [ -n "$OLD_IMAGE" ]; then
@@ -517,7 +519,7 @@ jobs:
             # Increment index for next iteration
             ((INDEX++))
 
-            # 5. Verify image exists in Docker Hub (canonical registry)
+            # 7. Verify image exists in Docker Hub (canonical registry)
             if [ "$VERIFY_EXISTENCE" = "true" ]; then
               # Use canonical image (without registry prefix) to verify in Docker Hub
               # This assumes mirror registries have the same images as Docker Hub
