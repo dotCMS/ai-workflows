@@ -284,9 +284,11 @@ jobs:
 
           if [ "$CHANGED_FILES" = "" ] || [ "$CHANGED_FILES" = "[]" ]; then
             echo "No files to validate"
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-            echo "images=[]" >> "$GITHUB_OUTPUT"
-            echo "old-images=[]" >> "$GITHUB_OUTPUT"
+            {
+              echo "result=pass"
+              echo "images=[]"
+              echo "old-images=[]"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -351,27 +353,31 @@ jobs:
             echo ""
             echo "❌ Validation failed for ${#FAILED_FILES[@]} file(s):"
             printf '   - %s\n' "${FAILED_FILES[@]}"
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "images=[]" >> "$GITHUB_OUTPUT"
-            echo "old-images=[]" >> "$GITHUB_OUTPUT"
+            {
+              echo "result=fail"
+              echo "images=[]"
+              echo "old-images=[]"
+            } >> "$GITHUB_OUTPUT"
             exit 1
           else
             # Convert arrays to JSON
-            if [ ${#NEW_IMAGES[@]} -gt 0 ]; then
-              IMAGES_JSON=$(printf '%s\n' "${NEW_IMAGES[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique')
-              echo "images=$IMAGES_JSON" >> "$GITHUB_OUTPUT"
-            else
-              echo "images=[]" >> "$GITHUB_OUTPUT"
-            fi
+            {
+              if [ ${#NEW_IMAGES[@]} -gt 0 ]; then
+                IMAGES_JSON=$(printf '%s\n' "${NEW_IMAGES[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique')
+                echo "images=$IMAGES_JSON"
+              else
+                echo "images=[]"
+              fi
 
-            if [ ${#OLD_IMAGES[@]} -gt 0 ]; then
-              OLD_IMAGES_JSON=$(printf '%s\n' "${OLD_IMAGES[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique')
-              echo "old-images=$OLD_IMAGES_JSON" >> "$GITHUB_OUTPUT"
-            else
-              echo "old-images=[]" >> "$GITHUB_OUTPUT"
-            fi
+              if [ ${#OLD_IMAGES[@]} -gt 0 ]; then
+                OLD_IMAGES_JSON=$(printf '%s\n' "${OLD_IMAGES[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique')
+                echo "old-images=$OLD_IMAGES_JSON"
+              else
+                echo "old-images=[]"
+              fi
 
-            echo "result=pass" >> "$GITHUB_OUTPUT"
+              echo "result=pass"
+            } >> "$GITHUB_OUTPUT"
             echo "✅ All files have only image field changes"
           fi
 
