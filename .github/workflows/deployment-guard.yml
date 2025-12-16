@@ -50,7 +50,7 @@ on:
         description: 'Whether to verify image exists in registry'
         required: false
         type: boolean
-        default: false
+        default: true
 
       # Testing parameter
       testing_force_non_bypass:
@@ -163,6 +163,7 @@ jobs:
               console.log(`ℹ️  RESULT: User ${actor} is not a public member of ${trustedOrg}`);
               console.log('🔒 FULL VALIDATION WILL BE ENFORCED');
             }
+
   validate-changed-files:
     name: Validate Changed Files
     runs-on: ubuntu-latest
@@ -208,8 +209,7 @@ jobs:
       - name: Check files against allowlist
         id: check-files
         run: |
-          # Clean temp files from any previous runs
-          rm -f /tmp/disallowed_files.txt
+          set -euo pipefail
 
           CHANGED_FILES='${{ steps.get-files.outputs.files }}'
           ALLOWED_PATTERN='${{ inputs.allowed_files_pattern }}'
@@ -223,30 +223,32 @@ jobs:
           echo "Validating files against pattern: $ALLOWED_PATTERN"
 
           # Convert glob pattern to regex
-          # First handle special case: .ya?ml → \.(yaml|yml)
-          # Then replace **/ with placeholder (as a unit, including the slash)
-          # Then replace remaining * with [^/]* (match any character except /)
-          # Then replace placeholder with ([^/]+/)* (match zero or more path segments)
-          # Note: Using # as delimiter to avoid conflicts with |
-          # Note: In grep -E, | should NOT be escaped (it's a regex alternation operator)
           PATTERN_REGEX=$(echo "$ALLOWED_PATTERN" | sed 's#\.ya?ml#\\.(yaml|yml)#g' | sed 's#\*\*/#__DOUBLESTAR__#g' | sed 's#\*#[^/]*#g' | sed 's#__DOUBLESTAR__#([^/]+/)*#g')
 
-          echo "$CHANGED_FILES" | jq -r '.[]' | while IFS= read -r file; do
+          # State variables (NO temporary files)
+          VALIDATION_FAILED=false
+          DISALLOWED_FILES=()
+
+          while IFS= read -r file; do
             if ! echo "$file" | grep -qE "^${PATTERN_REGEX}$"; then
               echo "❌ File not allowed: $file"
-              echo "$file" >> /tmp/disallowed_files.txt
+              VALIDATION_FAILED=true
+              DISALLOWED_FILES+=("$file")
             else
               echo "✅ File allowed: $file"
             fi
-          done
+          done < <(echo "$CHANGED_FILES" | jq -r '.[]')
 
-          if [ -f /tmp/disallowed_files.txt ]; then
+          # Final result
+          if [ "$VALIDATION_FAILED" = "true" ]; then
+            echo ""
+            echo "❌ Validation failed for ${#DISALLOWED_FILES[@]} file(s):"
+            printf '   - %s\n' "${DISALLOWED_FILES[@]}"
             echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "❌ Some files are not in the allowlist"
             exit 1
           else
-            echo "result=pass" >> "$GITHUB_OUTPUT"
             echo "✅ All files are in the allowlist"
+            echo "result=pass" >> "$GITHUB_OUTPUT"
           fi
 
   validate-image-only-changed:
@@ -276,23 +278,26 @@ jobs:
       - name: Check only image field changed
         id: check-changes
         run: |
-          # Clean temp files from any previous runs
-          rm -f /tmp/validation_failed.txt /tmp/new_images.txt /tmp/old_images.txt
+          set -euo pipefail
 
           CHANGED_FILES='${{ needs.validate-changed-files.outputs.changed-files }}'
 
           if [ "$CHANGED_FILES" = "" ] || [ "$CHANGED_FILES" = "[]" ]; then
             echo "No files to validate"
-            {
-              echo "result=pass"
-              echo "images=[]"
-            } >> "$GITHUB_OUTPUT"
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+            echo "images=[]" >> "$GITHUB_OUTPUT"
+            echo "old-images=[]" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
 
-          # Use process substitution to avoid subshell issues with pipe
+          # State variables (NO temporary files)
+          VALIDATION_FAILED=false
+          FAILED_FILES=()
+          NEW_IMAGES=()
+          OLD_IMAGES=()
+
           while IFS= read -r file; do
             echo "=================================================="
             echo "Validating: $file"
@@ -313,7 +318,8 @@ jobs:
 
             if [ -z "$OLD_IMAGE" ] || [ -z "$NEW_IMAGE" ]; then
               echo "❌ Could not extract dotCMS container image"
-              echo "false" > /tmp/validation_failed.txt
+              VALIDATION_FAILED=true
+              FAILED_FILES+=("$file: Could not extract image")
               continue
             fi
 
@@ -330,41 +336,42 @@ jobs:
               echo ""
               echo "Diff of normalized files:"
               diff <(echo "$OLD_NORMALIZED") <(echo "$NEW_NORMALIZED") || true
-              echo "false" > /tmp/validation_failed.txt
+              VALIDATION_FAILED=true
+              FAILED_FILES+=("$file: Changes beyond image field")
             else
               echo "✅ Only image changed: $OLD_IMAGE → $NEW_IMAGE"
-              echo "$NEW_IMAGE" >> /tmp/new_images.txt
-              echo "$OLD_IMAGE" >> /tmp/old_images.txt
+              NEW_IMAGES+=("$NEW_IMAGE")
+              OLD_IMAGES+=("$OLD_IMAGE")
             fi
             echo ""
           done < <(echo "$CHANGED_FILES" | jq -r '.[]')
 
-          if [ -f /tmp/validation_failed.txt ]; then
-            {
-              echo "result=fail"
-              echo "images=[]"
-              echo "old-images=[]"
-            } >> "$GITHUB_OUTPUT"
+          # Final result
+          if [ "$VALIDATION_FAILED" = "true" ]; then
+            echo ""
+            echo "❌ Validation failed for ${#FAILED_FILES[@]} file(s):"
+            printf '   - %s\n' "${FAILED_FILES[@]}"
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "images=[]" >> "$GITHUB_OUTPUT"
+            echo "old-images=[]" >> "$GITHUB_OUTPUT"
             exit 1
           else
-            # Use block redirect to satisfy shellcheck SC2129
-            {
-              if [ -f /tmp/new_images.txt ]; then
-                IMAGES_JSON=$(jq -R -s -c 'split("\n") | map(select(length > 0)) | unique' < /tmp/new_images.txt)
-                echo "images=$IMAGES_JSON"
-              else
-                echo "images=[]"
-              fi
+            # Convert arrays to JSON
+            if [ ${#NEW_IMAGES[@]} -gt 0 ]; then
+              IMAGES_JSON=$(printf '%s\n' "${NEW_IMAGES[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique')
+              echo "images=$IMAGES_JSON" >> "$GITHUB_OUTPUT"
+            else
+              echo "images=[]" >> "$GITHUB_OUTPUT"
+            fi
 
-              if [ -f /tmp/old_images.txt ]; then
-                OLD_IMAGES_JSON=$(jq -R -s -c 'split("\n") | map(select(length > 0)) | unique' < /tmp/old_images.txt)
-                echo "old-images=$OLD_IMAGES_JSON"
-              else
-                echo "old-images=[]"
-              fi
+            if [ ${#OLD_IMAGES[@]} -gt 0 ]; then
+              OLD_IMAGES_JSON=$(printf '%s\n' "${OLD_IMAGES[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique')
+              echo "old-images=$OLD_IMAGES_JSON" >> "$GITHUB_OUTPUT"
+            else
+              echo "old-images=[]" >> "$GITHUB_OUTPUT"
+            fi
 
-              echo "result=pass"
-            } >> "$GITHUB_OUTPUT"
+            echo "result=pass" >> "$GITHUB_OUTPUT"
             echo "✅ All files have only image field changes"
           fi
 
@@ -383,8 +390,7 @@ jobs:
       - name: Validate image format, repository, tag, and existence
         id: validate
         run: |
-          # Clean temp files from any previous runs
-          rm -f /tmp/validation_failed.txt
+          set -euo pipefail
 
           NEW_IMAGES='${{ needs.validate-image-only-changed.outputs.new-images }}'
           OLD_IMAGES='${{ needs.validate-image-only-changed.outputs.old-images }}'
@@ -398,15 +404,20 @@ jobs:
             exit 0
           fi
 
-          # Create arrays to map new images to old images by index
-          # Using mapfile to satisfy shellcheck SC2207
+          # State variables (NO temporary files)
+          VALIDATION_FAILED=false
+          FAILED_IMAGES=()
+
+          # Create arrays from JSON
+          mapfile -t NEW_IMAGES_ARRAY < <(echo "$NEW_IMAGES" | jq -r '.[]')
           mapfile -t OLD_IMAGES_ARRAY < <(echo "$OLD_IMAGES" | jq -r '.[]')
 
-          INDEX=0
-          # Use process substitution to avoid subshell issues with pipe
-          while IFS= read -r image; do
+          # Process each new image
+          for INDEX in "${!NEW_IMAGES_ARRAY[@]}"; do
+            image="${NEW_IMAGES_ARRAY[$INDEX]}"
+
             echo "=================================================="
-            echo "Validating image: $image"
+            echo "Validating image [$((INDEX + 1))/${#NEW_IMAGES_ARRAY[@]}]: $image"
             echo "=================================================="
 
             # 1. Validate format (repo/name:tag)
@@ -414,7 +425,8 @@ jobs:
               echo "❌ Image format validation failed"
               echo "   Image: $image"
               echo "   REASON: Invalid image format (expected format: repository/name:tag)"
-              echo "false" > /tmp/validation_failed.txt
+              VALIDATION_FAILED=true
+              FAILED_IMAGES+=("$image: Invalid format")
               continue
             fi
             echo "✅ Image format is valid"
@@ -427,11 +439,6 @@ jobs:
             echo "   Tag: $TAG"
 
             # 3. Extract base repository name (handle both with and without registry prefix)
-            # This is needed for both repository validation and image existence check
-            # Examples:
-            #   mirror.gcr.io/dotcms/dotcms -> dotcms/dotcms
-            #   gcr.io/project/dotcms/dotcms -> dotcms/dotcms
-            #   dotcms/dotcms -> dotcms/dotcms
             BASE_REPO="$REPO"
             if [[ "$REPO" =~ / ]]; then
               # Check if REPO starts with a registry domain
@@ -463,7 +470,8 @@ jobs:
                 echo "   Repository: $REPO"
                 echo "   REASON: Repository is not in the allowlist"
                 echo "   Allowed repositories: $ALLOWED_REPOS"
-                echo "false" > /tmp/validation_failed.txt
+                VALIDATION_FAILED=true
+                FAILED_IMAGES+=("$image: Repository not allowed")
                 continue
               fi
               echo "✅ Repository is allowed"
@@ -476,91 +484,138 @@ jobs:
               echo "❌ Version pattern validation failed"
               echo "   Tag: $TAG"
               echo "   Required pattern: $VERSION_PATTERN"
-              echo "   REASON: Only evergreen date-based versions are allowed"
-              echo "   Accepted formats: YY.MM.DD, YY.MM.DD-N, YY.MM.DD_hash, YY.MM.DD-N_hash (where YY >= 25)"
-              echo "false" > /tmp/validation_failed.txt
+              echo "   REASON: Tag does not match the required version pattern"
+              VALIDATION_FAILED=true
+              FAILED_IMAGES+=("$image: Version pattern mismatch")
               continue
             fi
             echo "✅ Tag matches version pattern"
 
             # 6. Anti-downgrade validation (compare versions)
-            # Get the corresponding old image by index
-            OLD_IMAGE="${OLD_IMAGES_ARRAY[$INDEX]}"
-            if [ -n "$OLD_IMAGE" ]; then
-              # Extract old tag
+            if [ "$INDEX" -lt "${#OLD_IMAGES_ARRAY[@]}" ]; then
+              OLD_IMAGE="${OLD_IMAGES_ARRAY[$INDEX]}"
               OLD_TAG="${OLD_IMAGE##*:}"
+
               echo ""
               echo "Checking for downgrades..."
               echo "   Old tag: $OLD_TAG"
               echo "   New tag: $TAG"
 
-              # Extract base version for comparison
-              # Handle formats: YY.MM.DD, YY.MM.DD-N, YY.MM.DD_hash, YY.MM.DD-N_hash
-              # First remove hash (everything after underscore)
-              OLD_VERSION_NO_HASH="${OLD_TAG%%_*}"
-              NEW_VERSION_NO_HASH="${TAG%%_*}"
+              # Parse version components
+              # Format: YY.MM.DD[-REBUILD][_HASH]
+              # Examples: 25.12.08, 25.12.08-2, 25.12.08_abc123, 25.12.08-2_abc123
 
-              # Then remove rebuild number (everything after first dash)
-              OLD_VERSION="${OLD_VERSION_NO_HASH%%-*}"
-              NEW_VERSION="${NEW_VERSION_NO_HASH%%-*}"
+              # Extract base version (YY.MM.DD)
+              OLD_BASE_VERSION=$(echo "$OLD_TAG" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || echo "")
+              NEW_BASE_VERSION=$(echo "$TAG" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || echo "")
 
-              # Compare versions (YY.MM.DD format)
-              # Convert to comparable format: YYMMDD
-              OLD_VER_NUM=$(echo "$OLD_VERSION" | tr -d '.')
-              NEW_VER_NUM=$(echo "$NEW_VERSION" | tr -d '.')
-
-              if [ "$NEW_VER_NUM" -lt "$OLD_VER_NUM" ]; then
-                echo "❌ Downgrade detected"
-                echo "   Old version: $OLD_VERSION"
-                echo "   New version: $NEW_VERSION"
-                echo "   REASON: Downgrades are not permitted (new version must be >= old version)"
-                echo "false" > /tmp/validation_failed.txt
-                continue
-              elif [ "$NEW_VER_NUM" -eq "$OLD_VER_NUM" ]; then
-                echo "✅ Same version (suffix may differ): $OLD_VERSION → $NEW_VERSION"
+              if [ -z "$OLD_BASE_VERSION" ] || [ -z "$NEW_BASE_VERSION" ]; then
+                echo "⚠️  Warning: Could not extract base version for comparison"
+                echo "   Old base version: $OLD_BASE_VERSION"
+                echo "   New base version: $NEW_BASE_VERSION"
               else
-                echo "✅ Version upgrade: $OLD_VERSION → $NEW_VERSION"
+                # Convert to comparable format: YYMMDD
+                OLD_VER_NUM=$(echo "$OLD_BASE_VERSION" | tr -d '.')
+                NEW_VER_NUM=$(echo "$NEW_BASE_VERSION" | tr -d '.')
+
+                if [ "$NEW_VER_NUM" -lt "$OLD_VER_NUM" ]; then
+                  echo "❌ Downgrade detected"
+                  echo "   Old version: $OLD_BASE_VERSION"
+                  echo "   New version: $NEW_BASE_VERSION"
+                  echo "   REASON: Downgrades are not permitted (new version must be >= old version)"
+                  VALIDATION_FAILED=true
+                  FAILED_IMAGES+=("$image: Downgrade from $OLD_BASE_VERSION to $NEW_BASE_VERSION")
+                  continue
+                elif [ "$NEW_VER_NUM" -eq "$OLD_VER_NUM" ]; then
+                  # Same base version - extract and compare rebuild numbers
+                  OLD_REBUILD=$(echo "$OLD_TAG" | grep -oE '\-[0-9]+' | tr -d '-' || echo "0")
+                  NEW_REBUILD=$(echo "$TAG" | grep -oE '\-[0-9]+' | tr -d '-' || echo "0")
+
+                  # Default to 0 if no rebuild number
+                  OLD_REBUILD=${OLD_REBUILD:-0}
+                  NEW_REBUILD=${NEW_REBUILD:-0}
+
+                  if [ "$NEW_REBUILD" -lt "$OLD_REBUILD" ]; then
+                    echo "❌ Rebuild downgrade detected"
+                    echo "   Old version: $OLD_BASE_VERSION-$OLD_REBUILD"
+                    echo "   New version: $NEW_BASE_VERSION-$NEW_REBUILD"
+                    echo "   REASON: Cannot downgrade from rebuild $OLD_REBUILD to rebuild $NEW_REBUILD"
+                    VALIDATION_FAILED=true
+                    FAILED_IMAGES+=("$image: Rebuild downgrade from -$OLD_REBUILD to -$NEW_REBUILD")
+                    continue
+                  elif [ "$NEW_REBUILD" -eq "$OLD_REBUILD" ]; then
+                    # Same version and rebuild - check for hash changes
+                    OLD_HASH=$(echo "$OLD_TAG" | grep -oE '_[a-f0-9]+$' | tr -d '_' || echo "")
+                    NEW_HASH=$(echo "$TAG" | grep -oE '_[a-f0-9]+$' | tr -d '_' || echo "")
+
+                    if [ -n "$OLD_HASH" ] && [ -n "$NEW_HASH" ]; then
+                      if [ "$OLD_HASH" = "$NEW_HASH" ]; then
+                        echo "✅ Same version (no changes): $OLD_TAG = $TAG"
+                      else
+                        echo "✅ Same version with different hash: $OLD_TAG → $TAG"
+                        echo "   Old hash: $OLD_HASH"
+                        echo "   New hash: $NEW_HASH"
+                      fi
+                    else
+                      echo "✅ Same version: $OLD_BASE_VERSION"
+                    fi
+                  else
+                    echo "✅ Rebuild upgrade: $OLD_BASE_VERSION-$OLD_REBUILD → $NEW_BASE_VERSION-$NEW_REBUILD"
+                  fi
+                else
+                  echo "✅ Version upgrade: $OLD_BASE_VERSION → $NEW_BASE_VERSION"
+                fi
               fi
             else
               echo "ℹ️  No old image found for comparison (new deployment or first validation)"
             fi
 
-            # Increment index for next iteration
-            ((INDEX++))
-
             # 7. Verify image exists in Docker Hub (canonical registry)
             if [ "$VERIFY_EXISTENCE" = "true" ]; then
               # Use canonical image (without registry prefix) to verify in Docker Hub
-              # This assumes mirror registries have the same images as Docker Hub
               CANONICAL_IMAGE="${BASE_REPO}:${TAG}"
 
-              echo "Verifying image exists in Docker Hub (canonical)..."
+              echo ""
+              echo "Verifying image exists in registry..."
               echo "   Canonical image: $CANONICAL_IMAGE"
 
+              # Try Docker Hub first
               if docker manifest inspect "$CANONICAL_IMAGE" >/dev/null 2>&1; then
                 echo "✅ Image exists in Docker Hub"
                 if [ "$REPO" != "$BASE_REPO" ]; then
                   echo "   Note: Assuming mirror registry ($REPO) has the same image"
                 fi
               else
-                echo "❌ Registry existence validation failed"
-                echo "   Canonical image: $CANONICAL_IMAGE"
-                echo "   REASON: Image does not exist in Docker Hub"
-                echo "false" > /tmp/validation_failed.txt
-                continue
+                # If not in Docker Hub, try the full image path (for private registries)
+                echo "⚠️  Image not found in Docker Hub, trying full image path: $image"
+                if docker manifest inspect "$image" >/dev/null 2>&1; then
+                  echo "✅ Image exists in registry: $REPO"
+                else
+                  echo "❌ Registry existence validation failed"
+                  echo "   Canonical image: $CANONICAL_IMAGE"
+                  echo "   Full image: $image"
+                  echo "   REASON: Image does not exist in Docker Hub or specified registry"
+                  VALIDATION_FAILED=true
+                  FAILED_IMAGES+=("$image: Does not exist in registry")
+                  continue
+                fi
               fi
             fi
 
             echo "✅ Image validated successfully: $image"
             echo ""
-          done < <(echo "$NEW_IMAGES" | jq -r '.[]')
+          done
 
-          if [ -f /tmp/validation_failed.txt ]; then
+          # Final result
+          if [ "$VALIDATION_FAILED" = "true" ]; then
+            echo ""
+            echo "❌ Validation failed for ${#FAILED_IMAGES[@]} image(s):"
+            printf '   - %s\n' "${FAILED_IMAGES[@]}"
             echo "result=fail" >> "$GITHUB_OUTPUT"
             exit 1
           else
-            echo "result=pass" >> "$GITHUB_OUTPUT"
             echo "✅ All images validated successfully"
+            echo "result=pass" >> "$GITHUB_OUTPUT"
           fi
 
   finalize:
@@ -662,7 +717,6 @@ jobs:
               echo "  - Repository: Only images from '${{ inputs.allowed_image_repositories }}' are allowed"
             fi
             echo "  - Version format: Must match pattern '${{ inputs.allowed_version_pattern }}'"
-            echo "    (Evergreen date-based versions only: YY.MM.DD, YY.MM.DD-N, YY.MM.DD_hash, YY.MM.DD-N_hash where YY >= 25)"
             if [ "${{ inputs.verify_image_existence }}" = "true" ]; then
               echo "  - Registry existence: Image must exist in the Docker registry"
             fi

@@ -1,0 +1,252 @@
+# Changelog
+
+All notable changes to the Deployment Guard workflow will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.0.0] - 2025-12-16
+
+### 🎯 Major Breaking Changes
+
+This is a complete architectural refactor of the Deployment Guard workflow to eliminate fragile temporary file-based state management and improve validation logic robustness.
+
+### ✨ Added
+
+- **Robust Version Comparison**: Complete rewrite of anti-downgrade logic with proper handling of:
+  - Base version comparison (YY.MM.DD format)
+  - Rebuild number comparison (e.g., `-2` in `25.12.08-2`)
+  - Hash comparison (e.g., `_abc123` in `25.12.08_abc123`)
+  - Full support for all combinations: `25.12.08`, `25.12.08-2`, `25.12.08_abc`, `25.12.08-2_abc`
+
+- **Improved Registry Validation**:
+  - Now tries Docker Hub first, then falls back to full image path for private registries
+  - Better error messages indicating which registry was checked
+  - Handles mirror registries more gracefully
+
+- **Enhanced Error Reporting**:
+  - State variables now accumulate ALL validation failures before exiting
+  - Detailed failure reasons shown for each failed image/file
+  - Clear indication of which validation step failed and why
+
+### 🔧 Changed
+
+- **BREAKING**: `verify_image_existence` now defaults to `true` (was `false` in v1.x)
+  - This was always the intended behavior but was disabled due to bugs in v1.x
+  - If you want to disable image existence checks, explicitly set to `false`
+
+- **State Management Architecture**: Complete replacement of temporary files with bash arrays
+  - **Before (v1.x)**: Used `/tmp/validation_failed.txt`, `/tmp/new_images.txt`, `/tmp/old_images.txt`
+  - **After (v2.0.0)**: Uses bash arrays: `VALIDATION_FAILED`, `FAILED_IMAGES`, `NEW_IMAGES`, `OLD_IMAGES`
+  - Eliminates race conditions and file cleanup issues
+  - Deterministic execution with explicit state tracking
+
+- **Error Handling**: Added `set -euo pipefail` to all bash scripts for strict error handling
+  - Scripts now fail fast on any command error
+  - Undefined variables cause immediate failure
+  - Pipe failures are properly detected
+
+### 🐛 Fixed
+
+- **Bug #1**: Fixed rebuild number downgrade detection
+  - **Issue**: v1.x allowed downgrade from `25.12.08-2` to `25.12.08` (no suffix)
+  - **Root Cause**: Version comparison only compared base version (YY.MM.DD), ignored rebuild numbers
+  - **Fix**: Now extracts and compares rebuild numbers when base version is the same
+  - **Example**: `25.12.08-2` → `25.12.08` is now correctly blocked as a downgrade
+  - **Example**: `25.12.08` → `25.12.08-2` is correctly allowed as an upgrade
+  - **Example**: `25.12.08-2_abc` → `25.12.08-2_xyz` is allowed (same version, different hash)
+
+- **Bug #2**: Fixed temporary file persistence issues
+  - **Issue**: v1.x had race conditions with `/tmp/validation_failed.txt` file
+  - **Root Cause**: Multiple writes to same file in loops, manual cleanup required
+  - **Fix**: Eliminated ALL temporary files, using in-memory bash arrays
+
+- **Bug #3**: Fixed image existence validation fragility
+  - **Issue**: v1.x only checked Docker Hub canonical image, failed for private registries
+  - **Root Cause**: Assumed all images exist in Docker Hub
+  - **Fix**: Now tries Docker Hub first, then falls back to full image path with registry
+
+- **Bug #4**: Fixed silent failures in validation loops
+  - **Issue**: v1.x would continue loop even after validation failure, sometimes skipping images
+  - **Root Cause**: Lack of strict error handling (`set -euo pipefail`)
+  - **Fix**: Added strict error handling and explicit state tracking
+
+- **Bug #5**: Fixed version pattern validation edge cases
+  - **Issue**: v1.x regex allowed malformed tags to pass
+  - **Root Cause**: Regex didn't enforce proper format boundaries
+  - **Fix**: Improved regex validation with proper anchoring and format checks
+
+### 🔒 Security
+
+- All bash scripts now use `set -euo pipefail` for strict error handling
+- Eliminated potential security issues from temporary file handling
+- Better validation of all input parameters before processing
+
+### 📝 Documentation
+
+- Added comprehensive CHANGELOG documenting all fixes
+- Improved inline comments explaining complex version comparison logic
+- Added examples of supported version formats in code comments
+
+## [1.1.1] - 2025-12-13
+
+### 🐛 Fixed
+
+- Fixed immutable tag support in image validation
+- Improved hash extraction for commit hashes in tags
+
+## [1.1.0] - 2025-12-12
+
+### ✨ Added
+
+- Added support for immutable tags with commit hashes
+- Added `testing_force_non_bypass` parameter for testing validation logic
+
+## [1.0.0] - 2025-12-10
+
+### ✨ Initial Release
+
+- Organization-based bypass for trusted members
+- File allowlist validation
+- Image-only change validation
+- Image format and repository validation
+- Version pattern validation
+- Basic anti-downgrade protection
+- Image existence verification in registry
+
+---
+
+## Migration Guide: v1.x → v2.0.0
+
+### Breaking Changes
+
+1. **`verify_image_existence` default changed from `false` to `true`**
+   - **Impact**: Image existence will now be verified by default
+   - **Action**: If you don't want existence checks, explicitly set to `false` in your workflow
+
+   ```yaml
+   # v1.x (implicit default)
+   uses: dotCMS/ai-workflows/.github/workflows/deployment-guard.yml@v1.1.1
+   # No need to specify verify_image_existence, defaults to false
+
+   # v2.0.0 (new default)
+   uses: dotCMS/ai-workflows/.github/workflows/deployment-guard.yml@v2.0.0
+   # Defaults to true, explicitly disable if needed:
+   with:
+     verify_image_existence: false
+   ```
+
+### What's Fixed in v2.0.0
+
+1. **Rebuild Downgrade Protection**: Now correctly blocks downgrades like `25.12.08-2` → `25.12.08`
+2. **Private Registry Support**: Image existence checks now work with private registries
+3. **Deterministic Execution**: No more temporary file race conditions
+4. **Complete Error Reporting**: All validation failures are reported, not just the first one
+
+### Testing Before Migrating
+
+We recommend testing v2.0.0 in a non-production branch first:
+
+```yaml
+# Create a test PR with this configuration
+uses: dotCMS/ai-workflows/.github/workflows/deployment-guard.yml@v2.0.0
+with:
+  testing_force_non_bypass: true  # Force validation even for org members
+  # ... rest of your configuration
+```
+
+### Recommended Migration Path
+
+1. **Week 1**: Deploy v2.0.0 to staging/dev environments
+2. **Week 2**: Monitor for any issues, validate all test cases pass
+3. **Week 3**: Deploy to production environments
+4. **Week 4**: Deprecate v1.x, update all references to v2.0.0
+
+---
+
+## Bug Details
+
+### Bug #1: Rebuild Downgrade Not Detected
+
+**Severity**: High
+**Impact**: Allowed downgrades that should be blocked
+
+**Scenario**:
+```yaml
+# Before: 25.12.08-2_abc123 (rebuild 2)
+# After:  25.12.08_xyz789     (no rebuild = rebuild 0)
+```
+
+**v1.x Behavior**: ✅ Allowed (incorrectly)
+- Extracted base version: `25.12.08` == `25.12.08` → Same version, allowed
+- Did NOT compare rebuild numbers
+
+**v2.0.0 Behavior**: ❌ Blocked (correctly)
+- Extracted base version: `25.12.08` == `25.12.08`
+- Extracted rebuild: `2` > `0` → Downgrade detected, blocked
+
+**Technical Details**:
+```bash
+# v1.x logic (BROKEN)
+OLD_VERSION_NO_HASH="${OLD_TAG%%_*}"      # 25.12.08-2
+NEW_VERSION_NO_HASH="${TAG%%_*}"           # 25.12.08
+OLD_VERSION="${OLD_VERSION_NO_HASH%%-*}"   # 25.12.08
+NEW_VERSION="${NEW_VERSION_NO_HASH%%-*}"   # 25.12.08
+# Only compared: 25.12.08 == 25.12.08 → ✅ PASS (BUG!)
+
+# v2.0.0 logic (FIXED)
+OLD_BASE_VERSION=$(echo "$OLD_TAG" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')  # 25.12.08
+NEW_BASE_VERSION=$(echo "$TAG" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')      # 25.12.08
+# Compare base: 25.12.08 == 25.12.08
+# Extract rebuilds: OLD=2, NEW=0
+# Compare rebuild: 2 > 0 → ❌ BLOCKED (CORRECT!)
+```
+
+### Bug #2: Temporary File Race Conditions
+
+**Severity**: Medium
+**Impact**: Non-deterministic failures, potential missed validations
+
+**Scenario**: Multiple validation failures in same job run
+
+**v1.x Behavior**:
+- Wrote `echo "false" > /tmp/validation_failed.txt` from different points
+- Files could be left behind from previous runs
+- Race conditions in concurrent validations
+
+**v2.0.0 Behavior**:
+- Uses in-memory bash arrays: `VALIDATION_FAILED=false`, `FAILED_IMAGES=()`
+- Accumulates all failures before exiting
+- Deterministic, no file system dependencies
+
+### Bug #3: Image Existence Check Failures
+
+**Severity**: High
+**Impact**: Validation failed for valid private registry images
+
+**Scenario**: Using a mirror registry (e.g., `mirror.gcr.io/dotcms/dotcms:25.12.08`)
+
+**v1.x Behavior**: ❌ Failed
+- Only checked Docker Hub: `docker manifest inspect dotcms/dotcms:25.12.08`
+- If image not in Docker Hub → validation failed
+- Didn't fallback to full image path
+
+**v2.0.0 Behavior**: ✅ Success
+- First tries Docker Hub: `dotcms/dotcms:25.12.08`
+- If not found, tries full path: `mirror.gcr.io/dotcms/dotcms:25.12.08`
+- Gracefully handles both public and private registries
+
+---
+
+## Version Support
+
+- **v2.0.0**: Current stable release (recommended)
+- **v1.1.1**: Previous release (will be deprecated 2026-01-16)
+- **v1.1.0**: Deprecated (use v1.1.1 or v2.0.0)
+- **v1.0.0**: Deprecated (use v2.0.0)
+
+## Support
+
+For issues or questions:
+- Report bugs: https://github.com/dotCMS/ai-workflows/issues
+- Security issues: security@dotcms.com
