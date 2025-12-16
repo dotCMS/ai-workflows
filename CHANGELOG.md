@@ -5,11 +5,11 @@ All notable changes to the Deployment Guard workflow will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - 2025-12-16
+## [1.1.2] - 2025-12-16
 
-### 🎯 Major Breaking Changes
+### 🐛 Critical Bug Fixes
 
-This is a complete architectural refactor of the Deployment Guard workflow to eliminate fragile temporary file-based state management and improve validation logic robustness.
+This is a complete architectural refactor of the Deployment Guard workflow to fix critical bugs that were present since v1.0.0. These bugs prevented proper validation and are now fixed without breaking changes.
 
 ### ✨ Added
 
@@ -31,13 +31,9 @@ This is a complete architectural refactor of the Deployment Guard workflow to el
 
 ### 🔧 Changed
 
-- **BREAKING**: `verify_image_existence` now defaults to `true` (was `false` in v1.x)
-  - This was always the intended behavior but was disabled due to bugs in v1.x
-  - If you want to disable image existence checks, explicitly set to `false`
-
 - **State Management Architecture**: Complete replacement of temporary files with bash arrays
   - **Before (v1.x)**: Used `/tmp/validation_failed.txt`, `/tmp/new_images.txt`, `/tmp/old_images.txt`
-  - **After (v2.0.0)**: Uses bash arrays: `VALIDATION_FAILED`, `FAILED_IMAGES`, `NEW_IMAGES`, `OLD_IMAGES`
+  - **After (v1.1.2)**: Uses bash arrays: `VALIDATION_FAILED`, `FAILED_IMAGES`, `NEW_IMAGES`, `OLD_IMAGES`
   - Eliminates race conditions and file cleanup issues
   - Deterministic execution with explicit state tracking
 
@@ -116,51 +112,32 @@ This is a complete architectural refactor of the Deployment Guard workflow to el
 
 ---
 
-## Migration Guide: v1.x → v2.0.0
+## Migration Guide: v1.1.1 → v1.1.2
 
-### Breaking Changes
+### No Breaking Changes
 
-1. **`verify_image_existence` default changed from `false` to `true`**
-   - **Impact**: Image existence will now be verified by default
-   - **Action**: If you don't want existence checks, explicitly set to `false` in your workflow
+v1.1.2 is a **hotfix release** that fixes critical bugs without changing the API or default behavior. All workflows using v1.1.1 can safely upgrade to v1.1.2 without any changes.
 
-   ```yaml
-   # v1.x (implicit default)
-   uses: dotCMS/ai-workflows/.github/workflows/deployment-guard.yml@v1.1.1
-   # No need to specify verify_image_existence, defaults to false
-
-   # v2.0.0 (new default)
-   uses: dotCMS/ai-workflows/.github/workflows/deployment-guard.yml@v2.0.0
-   # Defaults to true, explicitly disable if needed:
-   with:
-     verify_image_existence: false
-   ```
-
-### What's Fixed in v2.0.0
+### What's Fixed in v1.1.2
 
 1. **Rebuild Downgrade Protection**: Now correctly blocks downgrades like `25.12.08-2` → `25.12.08`
 2. **Private Registry Support**: Image existence checks now work with private registries
 3. **Deterministic Execution**: No more temporary file race conditions
 4. **Complete Error Reporting**: All validation failures are reported, not just the first one
 
-### Testing Before Migrating
+### Upgrade Steps
 
-We recommend testing v2.0.0 in a non-production branch first:
+Simply update the version tag in your workflow:
 
 ```yaml
-# Create a test PR with this configuration
-uses: dotCMS/ai-workflows/.github/workflows/deployment-guard.yml@v2.0.0
-with:
-  testing_force_non_bypass: true  # Force validation even for org members
-  # ... rest of your configuration
+# Before (v1.1.1 - buggy)
+uses: dotCMS/ai-workflows/.github/workflows/deployment-guard.yml@v1.1.1
+
+# After (v1.1.2 - fixed)
+uses: dotCMS/ai-workflows/.github/workflows/deployment-guard.yml@v1.1.2
 ```
 
-### Recommended Migration Path
-
-1. **Week 1**: Deploy v2.0.0 to staging/dev environments
-2. **Week 2**: Monitor for any issues, validate all test cases pass
-3. **Week 3**: Deploy to production environments
-4. **Week 4**: Deprecate v1.x, update all references to v2.0.0
+No configuration changes needed! All parameters remain the same.
 
 ---
 
@@ -177,24 +154,24 @@ with:
 # After:  25.12.08_xyz789     (no rebuild = rebuild 0)
 ```
 
-**v1.x Behavior**: ✅ Allowed (incorrectly)
+**v1.1.1 Behavior**: ✅ Allowed (incorrectly)
 - Extracted base version: `25.12.08` == `25.12.08` → Same version, allowed
 - Did NOT compare rebuild numbers
 
-**v2.0.0 Behavior**: ❌ Blocked (correctly)
+**v1.1.2 Behavior**: ❌ Blocked (correctly)
 - Extracted base version: `25.12.08` == `25.12.08`
 - Extracted rebuild: `2` > `0` → Downgrade detected, blocked
 
 **Technical Details**:
 ```bash
-# v1.x logic (BROKEN)
+# v1.1.1 logic (BROKEN)
 OLD_VERSION_NO_HASH="${OLD_TAG%%_*}"      # 25.12.08-2
 NEW_VERSION_NO_HASH="${TAG%%_*}"           # 25.12.08
 OLD_VERSION="${OLD_VERSION_NO_HASH%%-*}"   # 25.12.08
 NEW_VERSION="${NEW_VERSION_NO_HASH%%-*}"   # 25.12.08
 # Only compared: 25.12.08 == 25.12.08 → ✅ PASS (BUG!)
 
-# v2.0.0 logic (FIXED)
+# v1.1.2 logic (FIXED)
 OLD_BASE_VERSION=$(echo "$OLD_TAG" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')  # 25.12.08
 NEW_BASE_VERSION=$(echo "$TAG" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')      # 25.12.08
 # Compare base: 25.12.08 == 25.12.08
@@ -209,12 +186,12 @@ NEW_BASE_VERSION=$(echo "$TAG" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')      # 25.1
 
 **Scenario**: Multiple validation failures in same job run
 
-**v1.x Behavior**:
+**v1.1.1 Behavior**:
 - Wrote `echo "false" > /tmp/validation_failed.txt` from different points
 - Files could be left behind from previous runs
 - Race conditions in concurrent validations
 
-**v2.0.0 Behavior**:
+**v1.1.2 Behavior**:
 - Uses in-memory bash arrays: `VALIDATION_FAILED=false`, `FAILED_IMAGES=()`
 - Accumulates all failures before exiting
 - Deterministic, no file system dependencies
@@ -226,12 +203,12 @@ NEW_BASE_VERSION=$(echo "$TAG" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')      # 25.1
 
 **Scenario**: Using a mirror registry (e.g., `mirror.gcr.io/dotcms/dotcms:25.12.08`)
 
-**v1.x Behavior**: ❌ Failed
+**v1.1.1 Behavior**: ❌ Failed
 - Only checked Docker Hub: `docker manifest inspect dotcms/dotcms:25.12.08`
 - If image not in Docker Hub → validation failed
 - Didn't fallback to full image path
 
-**v2.0.0 Behavior**: ✅ Success
+**v1.1.2 Behavior**: ✅ Success
 - First tries Docker Hub: `dotcms/dotcms:25.12.08`
 - If not found, tries full path: `mirror.gcr.io/dotcms/dotcms:25.12.08`
 - Gracefully handles both public and private registries
@@ -240,10 +217,10 @@ NEW_BASE_VERSION=$(echo "$TAG" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')      # 25.1
 
 ## Version Support
 
-- **v2.0.0**: Current stable release (recommended)
-- **v1.1.1**: Previous release (will be deprecated 2026-01-16)
-- **v1.1.0**: Deprecated (use v1.1.1 or v2.0.0)
-- **v1.0.0**: Deprecated (use v2.0.0)
+- **v1.1.2**: Current stable release (recommended) - Bug fixes
+- **v1.1.1**: Previous release (deprecated - contains critical bugs)
+- **v1.1.0**: Deprecated (use v1.1.2)
+- **v1.0.0**: Deprecated (use v1.1.2)
 
 ## Support
 
