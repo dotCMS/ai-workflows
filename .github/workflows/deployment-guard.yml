@@ -208,6 +208,9 @@ jobs:
       - name: Check files against allowlist
         id: check-files
         run: |
+          # Clean temp files from any previous runs
+          rm -f /tmp/disallowed_files.txt
+
           CHANGED_FILES='${{ steps.get-files.outputs.files }}'
           ALLOWED_PATTERN='${{ inputs.allowed_files_pattern }}'
 
@@ -273,6 +276,9 @@ jobs:
       - name: Check only image field changed
         id: check-changes
         run: |
+          # Clean temp files from any previous runs
+          rm -f /tmp/validation_failed.txt /tmp/new_images.txt /tmp/old_images.txt
+
           CHANGED_FILES='${{ needs.validate-changed-files.outputs.changed-files }}'
 
           if [ "$CHANGED_FILES" = "" ] || [ "$CHANGED_FILES" = "[]" ]; then
@@ -377,6 +383,9 @@ jobs:
       - name: Validate image format, repository, tag, and existence
         id: validate
         run: |
+          # Clean temp files from any previous runs
+          rm -f /tmp/validation_failed.txt
+
           NEW_IMAGES='${{ needs.validate-image-only-changed.outputs.new-images }}'
           OLD_IMAGES='${{ needs.validate-image-only-changed.outputs.old-images }}'
           ALLOWED_REPOS='${{ inputs.allowed_image_repositories }}'
