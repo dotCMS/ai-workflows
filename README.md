@@ -11,7 +11,7 @@ This repository serves as the **central hub for all Claude AI tooling and integr
 - **📚 Best practices & examples** - Proven patterns for Claude integration across repositories
 - **🔒 Security tooling** - Deployment validation with organization-based trust and configurable rules
 
-**Share internally and externally**: Everything here is designed to be reusable across dotCMS repositories and shareable with the broader community.
+**Share internally and externally**: Everything here is designed to be reusable across dotCMS repositories and shareable with the broader community.  It is a pubic repo after all 😄 
 
 ---
 
