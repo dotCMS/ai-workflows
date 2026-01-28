@@ -1,5 +1,5 @@
 # ai-workflows
-Centralized Claude AI tooling, workflows, configurations, and best practices for dotCMS and related projects
+Centralized Claude AI tooling, workflows, configurations, and supposedly best practices for dotCMS and related projects
 
 ## 🎯 Repository Purpose
 
