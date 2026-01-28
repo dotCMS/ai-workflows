@@ -8,87 +8,110 @@ This repository provides centralized, reusable GitHub Actions workflows for Clau
 
 ## Architecture Overview
 
-The repository implements a simple, reliable architecture:
+The repository implements a simple, reliable architecture with three reusable workflows:
 
 ### Core Workflows
 
-- **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): A lightweight wrapper that calls the executor with minimal configuration. This is the recommended workflow for consumer repositories (FIXED - no longer has the original architectural issues).
-- **Claude Executor** (`.github/workflows/claude-executor.yml`): The execution engine that runs Claude AI actions with configurable tools, timeouts, and runners.
+- **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): Lightweight wrapper that handles @claude mention detection and routes to executor. Consumer repositories call this with `trigger_mode: interactive` or `trigger_mode: automatic`.
+- **Claude Executor** (`.github/workflows/claude-executor.yml`): Execution engine that runs the `anthropics/claude-code-action@beta` with configured tools, timeouts, and runners.
+- **Deployment Guard** (`.github/workflows/deployment-guard.yml`): Reusable workflow for validating deployment changes with configurable rules. Features organization-based bypass for trusted members, file allowlist validation, image-only change detection, and comprehensive image validation (format, repository, version pattern, registry existence, anti-downgrade logic).
 
-### Key Design Patterns
+### Critical Architectural Insight
 
-- **Consumer-Handled Triggers**: Consumer repositories handle their own webhook triggers and conditional logic, then call the centralized workflows
-- **Simple Reusable Workflows**: The `claude-orchestrator.yml` workflow provides a clean interface to the executor
-- **Parameterization**: Workflows accept inputs for customization (prompts, tools, timeouts, runners)
-- **Security Isolation**: Each consuming repository must provide its own `ANTHROPIC_API_KEY` for cost tracking and security
+The original orchestrator attempted to centralize trigger logic, but GitHub Actions `workflow_call` loses the original webhook event context. When a consumer workflow calls a reusable workflow, `github.event_name` becomes `"workflow_call"` instead of the original event (like `"issue_comment"`), causing all conditional logic to fail.
+
+**Solution**: Consumer repositories handle their own webhook events and conditional logic, then call the centralized workflows only when conditions are met. This prevents double triggering and maintains proper event context.
 
 ## Common Commands
 
 ### Testing and Validation
 
 ```bash
-# Lint YAML files
-yamllint -c .yamllint.yml **/*.yml **/*.yaml
+# Lint all workflows with actionlint (via docker)
+docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.7
 
 # Validate workflow syntax
 python -c "import yaml; yaml.safe_load(open('.github/workflows/claude-orchestrator.yml'))"
 python -c "import yaml; yaml.safe_load(open('.github/workflows/claude-executor.yml'))"
+python -c "import yaml; yaml.safe_load(open('.github/workflows/deployment-guard.yml'))"
+
+# Run automated tests
+# Tests are defined in .github/workflows/tests.yml and run automatically on PR/push to main
 ```
 
-### Workflow Testing
+### Testing Deployment Guard
 
-The repository includes automated tests in `.github/workflows/tests.yml` that:
+The deployment-guard workflow includes a `testing_force_non_bypass` parameter for testing validation logic even when you're an organization member. See recent commits `9e1db62` and earlier for refactoring details and state management improvements.
 
-- Lint all YAML files using yamllint configuration
-- Validate GitHub Actions workflow syntax
-- Check for required workflow elements (name, on, jobs)
-- Validate secret requirements in reusable workflows
+## Development Patterns
 
-## Configuration Files
+### ZSH Command Safety (CRITICAL)
 
-- **`.yamllint.yml`**: YAML linting configuration with 240-character line length limit and 2-space indentation
-- **Examples**: `examples/consumer-repo-workflow.yml` shows how consuming repositories should reference these workflows
+When using terminal commands, especially git and GitHub CLI operations:
+
+- **ALWAYS** use single quotes for simple strings
+- **NEVER** use emojis or special characters in inline git/gh commands
+- **USE** separate files for complex content (release notes, commit messages) instead of inline strings
+- **STOP IMMEDIATELY** (Ctrl+C) if you see `dquote>` or `>` prompts - this means ZSH escaping issues
+
+**Safe patterns:**
+```bash
+# Good - simple commands with file-based content
+git tag v1.0.0
+gh release create v1.0.0 --title "Simple Title" --notes-file release-notes.md
+
+# Bad - complex inline content causes ZSH issues
+git tag -a v1.0.0 -m "🎉 Release with emojis"
+gh release create v1.0.0 --notes "Complex @ content"
+```
+
+### File Management Best Practices
+
+The deployment-guard workflow demonstrates critical state management patterns:
+- **NO temporary files** - Use bash arrays and variables instead
+- Avoids race conditions and cleanup issues
+- See commit `9e1db62` (deployment-guard v2.0.0) for robust state management examples
+
+### Version Tagging
+
+**ALWAYS use version tags** (`@v1.0.0`) instead of `@main` for production workflows:
+```yaml
+# Production-safe
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+
+# Unsafe - can break unexpectedly
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@main
+```
 
 ## Usage by Consuming Repositories
 
-### Recommended Approach: Consumer-Handled Triggers
+Consumer repositories handle their own webhook triggers and conditional logic, then call centralized workflows. This preserves event context and prevents double triggering.
 
-The recommended approach is for consumer repositories to handle their own webhook triggers and conditional logic, then call the centralized `claude-orchestrator.yml` workflow. This approach is reliable and avoids the architectural issues with the orchestrator pattern.
-
-**Example for interactive @claude mentions:**
-
+**Interactive mode example (with built-in @claude detection):**
 ```yaml
 jobs:
-  claude-comment-mention:
-    if: |
-      github.event_name == 'issue_comment' && (
-        contains(github.event.comment.body, '@claude') ||
-        contains(github.event.comment.body, '@Claude') ||
-        contains(github.event.comment.body, '@CLAUDE')
-      )
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+  claude-interactive:
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: interactive
+      enable_mention_detection: true  # Built-in @claude detection
       allowed_tools: |
         Bash(terraform plan)
         Bash(git status)
-      timeout_minutes: 15
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-**Example for automatic PR reviews:**
-
+**Automatic mode example:**
 ```yaml
-  claude-automatic-review:
-    if: |
-      github.event_name == 'pull_request' &&
-      !contains(github.event.pull_request.title, '@claude')
-    uses: dotCMS/claude-workflows/.github/workflows/claude-orchestrator.yml@main
+  claude-automatic:
+    if: github.event_name == 'pull_request'
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: automatic
+      enable_mention_detection: false
       direct_prompt: |
-        Please review this pull request and provide feedback...
+        Please review this pull request for code quality and security.
       allowed_tools: |
         Bash(terraform plan)
         Bash(git status)
@@ -96,59 +119,73 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-### Why This Approach?
+**Custom trigger conditions:**
+```yaml
+  claude-security-review:
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    with:
+      trigger_mode: automatic
+      enable_mention_detection: false
+      custom_trigger_condition: |
+        github.event_name == 'pull_request' && (
+          contains(github.event.pull_request.title, 'security') ||
+          contains(github.event.pull_request.body, 'vulnerability')
+        )
+      direct_prompt: Review for security implications.
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
 
-The original orchestrator design had a fundamental flaw: when called via `workflow_call`, the `github.event_name` becomes `"workflow_call"` instead of the original trigger event (like `"issue_comment"`), causing all conditional logic to fail and resulting in double triggering.
+See `examples/` directory for complete working examples.
 
-The consumer-handled approach solves this by:
+## Deployment Guard Workflow
 
-1. Consumer workflows handle their own webhook events directly
-2. They evaluate trigger conditions using the original event context
-3. They call the simple centralized workflow only when conditions are met
-4. No double triggering occurs
+The deployment-guard workflow provides configurable validation for deployment changes:
 
-See the complete examples in the `examples/` directory:
+### Key Features
+- **Organization-based bypass**: Public members of a trusted organization bypass all validations
+- **File allowlist**: Restrict changes to specific file patterns (glob-based)
+- **Image-only validation**: Ensure only container image fields are modified (no resource/env changes)
+- **Image validation**: Format, repository, version pattern, registry existence, anti-downgrade checking
+- **Testing mode**: `testing_force_non_bypass: true` to test validation logic even as org member
 
-- `examples/consumer-repo-workflow.yml` - General purpose example
-- `examples/infrastructure-consumer-workflow.yml` - Infrastructure-specific example
+### State Management Pattern
+The deployment-guard demonstrates robust bash state management without temporary files (see `deployment-guard.yml:227-252` and `297-382`):
+- Uses bash arrays instead of temp files to avoid race conditions
+- Proper error handling with `set -euo pipefail`
+- Clear state tracking with boolean flags
+
+### Version Validation Logic
+Sophisticated version comparison supporting dotCMS format: `YY.MM.DD[-REBUILD][_HASH]`
+- Prevents downgrades at base version level (25.12.08 → 25.12.07)
+- Prevents rebuild downgrades (25.12.08-2 → 25.12.08-1)
+- Allows hash changes for same version (25.12.08_abc → 25.12.08_def)
 
 ## Security Requirements
 
 - Each consuming repository MUST provide its own `ANTHROPIC_API_KEY` secret
 - API keys are required for cost tracking, security isolation, and usage control
 - Workflows will fail if the API key is not provided
-
-## Workflow Triggers Supported
-
-- Interactive @claude mentions (case-insensitive) in:
-  - Issue comments
-  - Pull request review comments  
-  - Pull request reviews
-  - Issue titles/bodies
-  - Pull request titles/bodies
-- Automatic pull request reviews (when no @claude mention is present)
+- Never commit secrets to version control
 
 ## Default Configuration
 
+### Claude Workflows
 - **Timeout**: 15 minutes
-- **Runner**: ubuntu-latest  
+- **Runner**: ubuntu-latest
 - **Default Tools**: `git status` and `git diff`
-- **Concurrency**: Consumer repositories should implement concurrency control:
+- **Mention Detection**: Case-insensitive @claude in comments, reviews, issues, and PRs
+- **Concurrency**: Consumer repositories should implement concurrency control to prevent duplicate runs
 
-  ```yaml
-  concurrency:
-    group: claude-${{ github.event.pull_request.number || github.event.issue.number || 'manual' }}
-    cancel-in-progress: false
-  ```
+### Deployment Guard
+- **Organization bypass**: Disabled by default (must configure `trusted_organization`)
+- **All validations**: Enabled by default
+- **Image verification**: Checks Docker Hub by default
 
-## Migration from Old Orchestrator
+## Important Files
 
-If you're currently using the old version of `claude-orchestrator.yml` workflow that had double triggering issues, migrate to the new pattern:
-
-1. Replace the single orchestrator call with multiple jobs that handle different trigger conditions
-2. Each job should call the fixed `claude-orchestrator.yml` with appropriate `trigger_mode`
-3. Add proper concurrency control to your consumer workflow
-4. Test that @claude mentions and automatic reviews work without double triggering
-
-See the example files for complete migration templates.
+- **ARCHITECTURE.md**: Deep dive into workflow architecture and why consumer-handled triggers are necessary
+- **CLAUDE_WORKFLOW_MIGRATION.md**: Step-by-step migration guide from pilot workflows
+- **.cursor/rules/**: Modular development rules covering terminal commands, git workflow, release process, error prevention, and collaboration patterns
+- **examples/**: Working examples for general-purpose, infrastructure, and advanced custom triggers
 

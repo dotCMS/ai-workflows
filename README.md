@@ -1,13 +1,54 @@
 # ai-workflows
-Reusable Claude AI GitHub Actions workflows and config for dotCMS and related projects
+Centralized Claude AI tooling, workflows, configurations, and supposedly best practices for dotCMS and related projects
 
-## 🚀 Centralized Claude Workflows: Migration & Overview
+## 🎯 Repository Purpose
 
-**This repository now provides a centralized, reusable system for all Claude AI GitHub Actions workflows.**
+This repository serves as the **central hub for all Claude AI tooling and integrations** across dotCMS projects. It provides:
 
-- **Replaces the pilot workflow previously used in `dotcms/infrastructure-as-code`.**
-- **Keeps things DRY and maintainable** by consolidating logic into orchestrator and executor workflows.
-- **Still allows full repo-level customization** via workflow inputs (prompts, allowed tools, runners, etc.).
+- **🔄 Reusable GitHub Actions workflows** - Claude orchestrator, executor, and deployment guard workflows
+- **⚙️ Shared configurations** - Claude settings, development patterns, and cursor rules
+- **🛠️ Custom tools & commands** - Slash commands like `/weekly-work` for team productivity
+- **📚 Best practices & examples** - Proven patterns for Claude integration across repositories
+- **🔒 Security tooling** - Deployment validation with organization-based trust and configurable rules
+
+**Share internally and externally**: Everything here is designed to be reusable across dotCMS repositories and shareable with the broader community.  It is a pubic repo after all 😄 
+
+---
+
+## 🚀 What's Inside
+
+### GitHub Actions Workflows
+
+**Centralized, DRY, and maintainable workflows** for Claude AI integration:
+
+- **Claude Orchestrator** (`claude-orchestrator.yml`) - Routes triggers with @claude mention detection
+- **Claude Executor** (`claude-executor.yml`) - Executes Claude actions with configurable tools
+- **Deployment Guard** (`deployment-guard.yml`) - Validates deployment changes with org-based bypass
+
+**Migration**: Replaces the pilot workflow previously used in `dotcms/infrastructure-as-code`. See [CLAUDE_WORKFLOW_MIGRATION.md](./CLAUDE_WORKFLOW_MIGRATION.md) for details.
+
+### Claude Commands & Tools
+
+Custom slash commands for enhanced productivity:
+
+- **`/weekly-work`** - Generate team work summaries from merged PRs within date ranges
+- Located in `.claude/commands/` for easy sharing across repositories
+
+### Development Guidelines
+
+Comprehensive best practices and patterns:
+
+- **`.cursor/rules/`** - Modular development rules (terminal commands, git workflow, release process, error prevention)
+- **`CLAUDE.md`** - Repository-specific guidance for Claude Code
+- **`ARCHITECTURE.md`** - Deep dive into workflow architecture and design decisions
+
+### Examples & Templates
+
+Working examples for quick adoption:
+
+- **`examples/consumer-repo-workflow.yml`** - Basic @claude mention integration
+- **`examples/infrastructure-consumer-workflow.yml`** - Infrastructure-specific tooling
+- **`examples/advanced-custom-triggers.yml`** - Custom trigger patterns
 
 ---
 
@@ -109,18 +150,56 @@ Routes all Claude triggers (PRs, issues, comments, reviews) to the correct execu
 ### Claude Executor (`claude-executor.yml`)
 Handles the actual execution of Claude actions, with configurable parameters (prompts, allowed tools, runner, etc.).
 
+### Deployment Guard (`deployment-guard.yml`)
+Validates deployment changes with sophisticated rules:
+- Organization-based bypass for trusted public members
+- File allowlist validation (glob patterns)
+- Image-only change detection
+- Image validation (format, repository, version, registry existence, anti-downgrade)
+- Testing mode for validation logic verification
+
 ---
 
-## Setup Instructions
+## Using Custom Commands
 
-### 1. Repository Secret Configuration
+### Installing Slash Commands
+
+Copy commands from `.claude/commands/` to your repository's `.claude/commands/` directory to make them available in Claude Code.
+
+**Example: Weekly Work Summary**
+
+1. Copy `.claude/commands/weekly-work.md` to your repo
+2. Use in Claude Code: `/weekly-work falcon 2025-01-20 2025-01-26`
+3. Get a consolidated summary of merged PRs grouped by feature/topic
+
+### Sharing Cursor Rules
+
+The `.cursor/rules/` directory contains modular development guidelines:
+
+- **terminal-commands.md** - ZSH escaping, safe command patterns
+- **git-workflow.md** - Git and GitHub CLI best practices
+- **release-process.md** - Release automation and semantic versioning
+- **error-prevention.md** - Common issues and recovery procedures
+- **development-patterns.md** - Code quality and testing standards
+- **thoughtful-execution.md** - Planning and collaboration principles
+
+Copy these to your repository's `.cursor/rules/` directory to share best practices with your team.
+
+---
+
+## Quick Start
+
+### 1. Using GitHub Actions Workflows
+
+**Repository Secret Configuration**
+
 Each consuming repository must configure its own Anthropic API key:
 
 1. Go to your repository's Settings → Secrets and variables → Actions
 2. Create a new repository secret named `ANTHROPIC_API_KEY`
 3. Set the value to your Anthropic API key
 
-### 2. Using the Centralized Claude Workflow
+**Create a Workflow File**
 
 Create a workflow file in your repository at `.github/workflows/claude-review.yml` (or similar):
 
@@ -239,7 +318,95 @@ uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
 with:
   trigger_mode: interactive
   custom_trigger_condition: |
-    github.event_name == 'issues' && 
+    github.event_name == 'issues' &&
     contains(github.event.issue.labels.*.name, 'urgent')
   enable_mention_detection: false
 ```
+
+---
+
+## Repository Structure
+
+```
+ai-workflows/
+├── .github/workflows/          # Reusable GitHub Actions workflows
+│   ├── claude-orchestrator.yml # Claude workflow router
+│   ├── claude-executor.yml     # Claude execution engine
+│   ├── deployment-guard.yml    # Deployment validation
+│   └── tests.yml               # Automated workflow testing
+├── .claude/
+│   ├── commands/               # Custom slash commands
+│   │   └── weekly-work.md      # Team work summary generator
+│   └── settings.local.json     # Claude Code settings
+├── .cursor/rules/              # Development best practices
+│   ├── terminal-commands.md    # Safe command patterns
+│   ├── git-workflow.md         # Git & GitHub CLI patterns
+│   ├── release-process.md      # Release automation
+│   ├── error-prevention.md     # Troubleshooting guide
+│   ├── development-patterns.md # Code quality standards
+│   └── thoughtful-execution.md # Collaboration principles
+├── examples/                   # Working examples
+│   ├── consumer-repo-workflow.yml
+│   ├── infrastructure-consumer-workflow.yml
+│   └── advanced-custom-triggers.yml
+├── ARCHITECTURE.md             # Workflow architecture deep dive
+├── CLAUDE.md                   # Claude Code guidance
+├── CLAUDE_WORKFLOW_MIGRATION.md # Migration guide
+└── README.md                   # This file
+```
+
+---
+
+## Adopting This Repository's Tooling
+
+### For Your Repository
+
+**Pick what you need:**
+
+1. **GitHub Actions only**: Use the workflows via `uses:` statements (see Quick Start)
+2. **Commands**: Copy `.claude/commands/` files to your repo
+3. **Development rules**: Copy `.cursor/rules/` files to your repo
+4. **Full adoption**: Use workflows + copy commands + copy rules for comprehensive Claude integration
+
+### For Internal Teams
+
+This repository is designed for both internal dotCMS use and external sharing:
+
+- **Internal**: All dotCMS repositories can adopt these workflows and tools
+- **External**: Community members can use these patterns in their own projects
+- **Contributions welcome**: Improvements and new tools benefit everyone
+
+### Version Tags
+
+**Always use version tags** (`@v1.0.0`) instead of `@main` for production stability:
+
+```yaml
+# ✅ Production-safe
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+
+# ❌ Unstable - avoid for production
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@main
+```
+
+---
+
+## Learn More
+
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Understand why consumer-handled triggers are necessary
+- **[CLAUDE.md](./CLAUDE.md)** - Repository-specific guidance for Claude Code
+- **[CLAUDE_WORKFLOW_MIGRATION.md](./CLAUDE_WORKFLOW_MIGRATION.md)** - Migrate from pilot workflows
+- **[examples/](./examples/)** - Working examples for different use cases
+- **[.cursor/rules/](./.cursor/rules/)** - Comprehensive development best practices
+
+---
+
+## Contributing
+
+Improvements to workflows, commands, and best practices benefit the entire dotCMS ecosystem and community. When contributing:
+
+1. Test changes thoroughly (workflows have automated tests in `.github/workflows/tests.yml`)
+2. Update documentation (CLAUDE.md, ARCHITECTURE.md, README.md)
+3. Follow semantic versioning for releases
+4. Add examples for new features
+
+See `.cursor/rules/` for development patterns and best practices.
