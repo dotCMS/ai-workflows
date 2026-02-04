@@ -32,6 +32,7 @@ This repository serves as the **central hub for all Claude AI tooling and integr
 Custom slash commands for enhanced productivity:
 
 - **`/weekly-work`** - Generate team work summaries from merged PRs within date ranges
+- **`/find-first-release`** - Find the first release (git tag) containing an issue, PR, or commit
 - Located in `.claude/commands/` for easy sharing across repositories
 
 ### Development Guidelines
@@ -171,6 +172,12 @@ Copy commands from `.claude/commands/` to your repository's `.claude/commands/` 
 1. Copy `.claude/commands/weekly-work.md` to your repo
 2. Use in Claude Code: `/weekly-work falcon 2025-01-20 2025-01-26`
 3. Get a consolidated summary of merged PRs grouped by feature/topic
+
+**Example: Find First Release**
+
+1. Copy `.claude/commands/find-first-release.md` to your repo
+2. Use in Claude Code: `/find-first-release 21` (or PR URL, or commit SHA)
+3. Discover which release first included a specific change
 
 ### Sharing Cursor Rules
 
@@ -336,7 +343,8 @@ ai-workflows/
 │   └── tests.yml               # Automated workflow testing
 ├── .claude/
 │   ├── commands/               # Custom slash commands
-│   │   └── weekly-work.md      # Team work summary generator
+│   │   ├── weekly-work.md      # Team work summary generator
+│   │   └── find-first-release.md # Find first release for issue/PR/commit
 │   └── settings.local.json     # Claude Code settings
 ├── .cursor/rules/              # Development best practices
 │   ├── terminal-commands.md    # Safe command patterns
