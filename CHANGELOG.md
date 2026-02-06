@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Uses `git tag --contains` to find the first release containing the commit
   - Provides rich output with release date, commit count, and release URL
   - Handles edge cases: unreleased commits, unmerged PRs, and invalid input
+  - **Also available as [Gemini Gem](https://gemini.google.com/gem/1M7bkH8P-Inz6yRf1MRRuZEDK-_XPd0EL?usp=sharing)** for broader team access
 
 ## [1.1.2] - 2025-12-16
 

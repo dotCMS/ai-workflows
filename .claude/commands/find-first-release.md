@@ -2,6 +2,8 @@
 
 Find the first release (git tag) that contains a given issue, pull request, or commit.
 
+**Also Available as Gemini Gem:** For team members without Claude Code access, use the [Gemini Gem version](https://gemini.google.com/gem/1M7bkH8P-Inz6yRf1MRRuZEDK-_XPd0EL?usp=sharing).
+
 ## Usage
 
 ```

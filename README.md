@@ -33,6 +33,7 @@ Custom slash commands for enhanced productivity:
 
 - **`/weekly-work`** - Generate team work summaries from merged PRs within date ranges
 - **`/find-first-release`** - Find the first release (git tag) containing an issue, PR, or commit
+  - Also available as [Gemini Gem](https://gemini.google.com/gem/1M7bkH8P-Inz6yRf1MRRuZEDK-_XPd0EL?usp=sharing) for broader team access
 - Located in `.claude/commands/` for easy sharing across repositories
 
 ### Development Guidelines
@@ -175,8 +176,8 @@ Copy commands from `.claude/commands/` to your repository's `.claude/commands/` 
 
 **Example: Find First Release**
 
-1. Copy `.claude/commands/find-first-release.md` to your repo
-2. Use in Claude Code: `/find-first-release 21` (or PR URL, or commit SHA)
+1. **Claude Code**: Copy `.claude/commands/find-first-release.md` to your repo, then use `/find-first-release 21` (or PR URL, or commit SHA)
+2. **Gemini**: Use the [Gemini Gem](https://gemini.google.com/gem/1M7bkH8P-Inz6yRf1MRRuZEDK-_XPd0EL?usp=sharing) for team members without Claude Code access
 3. Discover which release first included a specific change
 
 ### Sharing Cursor Rules
