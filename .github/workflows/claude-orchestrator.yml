@@ -50,6 +50,11 @@ on:
         required: false
         type: boolean
         default: true
+      skip_automatic_when_mentioned:
+        description: 'Skip automatic mode when PR title/body contains @claude mention'
+        required: false
+        type: boolean
+        default: true
       custom_trigger_condition:
         description: 'Custom condition to override default mention detection (optional)'
         required: false
@@ -96,7 +101,20 @@ jobs:
             contains(github.event.pull_request.body, '@CLAUDE')
           ))
         )
-      ) || inputs.trigger_mode == 'automatic'
+      ) || (
+        inputs.trigger_mode == 'automatic' && (
+          inputs.skip_automatic_when_mentioned == false || (
+            github.event_name != 'pull_request' || (
+              !contains(github.event.pull_request.title, '@claude') &&
+              !contains(github.event.pull_request.title, '@Claude') &&
+              !contains(github.event.pull_request.title, '@CLAUDE') &&
+              !contains(github.event.pull_request.body, '@claude') &&
+              !contains(github.event.pull_request.body, '@Claude') &&
+              !contains(github.event.pull_request.body, '@CLAUDE')
+            )
+          )
+        )
+      )
     uses: ./.github/workflows/claude-executor.yml
     with:
       trigger_mode: ${{ inputs.trigger_mode }}

@@ -219,8 +219,17 @@ on:
     types: [opened, synchronize]
 
 jobs:
-  # Interactive Claude mentions using built-in detection
+  # Interactive Claude mentions (guarded to avoid PR opened/synchronize noise)
   claude-interactive:
+    if: |
+      github.event_name != 'pull_request' || (
+        contains(github.event.pull_request.title, '@claude') ||
+        contains(github.event.pull_request.title, '@Claude') ||
+        contains(github.event.pull_request.title, '@CLAUDE') ||
+        contains(github.event.pull_request.body, '@claude') ||
+        contains(github.event.pull_request.body, '@Claude') ||
+        contains(github.event.pull_request.body, '@CLAUDE')
+      )
     uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: interactive
@@ -231,7 +240,7 @@ jobs:
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
-  # Automatic PR reviews (no @claude mention required)
+  # Automatic PR reviews (orchestrator skips when @claude mention exists by default)
   claude-automatic:
     if: github.event_name == 'pull_request'
     uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
@@ -243,6 +252,7 @@ jobs:
         Bash(git status)
         Bash(git diff)
       enable_mention_detection: false  # No mention detection for automatic reviews
+      # skip_automatic_when_mentioned: false  # Optional: allow automatic mode even with @claude mention
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
@@ -257,6 +267,7 @@ jobs:
 | `timeout_minutes` | Timeout for Claude execution | No | 15 |
 | `runner` | GitHub runner to use | No | ubuntu-latest |
 | `enable_mention_detection` | Enable built-in @claude mention detection | No | true |
+| `skip_automatic_when_mentioned` | Skip automatic mode when PR title/body contains @claude | No | true |
 | `custom_trigger_condition` | Custom condition to override default detection | No | - |
 
 ### 4. Advanced: Custom Trigger Conditions
@@ -282,6 +293,28 @@ jobs:
 ```
 
 **Note**: When using `custom_trigger_condition`, set `enable_mention_detection: false` to avoid conflicts.
+
+### 5. Dual Invocation Troubleshooting
+
+If you run both interactive and automatic jobs in the same workflow:
+
+- Add a job-level guard to `claude-interactive` so it does not invoke on every `pull_request` opened/synchronize event.
+- Keep `claude-automatic` scoped to `pull_request` events.
+- Rely on `skip_automatic_when_mentioned: true` (default) to prevent automatic reviews from overlapping when `@claude` appears in PR title/body.
+
+Minimal interactive guard:
+
+```yaml
+if: |
+  github.event_name != 'pull_request' || (
+    contains(github.event.pull_request.title, '@claude') ||
+    contains(github.event.pull_request.title, '@Claude') ||
+    contains(github.event.pull_request.title, '@CLAUDE') ||
+    contains(github.event.pull_request.body, '@claude') ||
+    contains(github.event.pull_request.body, '@Claude') ||
+    contains(github.event.pull_request.body, '@CLAUDE')
+  )
+```
 
 ---
 
