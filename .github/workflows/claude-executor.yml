@@ -10,7 +10,7 @@
 #
 # ROLE:
 # - Sets up the execution environment (permissions, timeouts, runner)
-# - Configures the anthropics/claude-code-action with configurable allowed tools
+# - Configures the anthropics/claude-code-action with configurable claude_args
 # - Handles the actual Claude AI interaction
 # - Provides a single source of truth for Claude execution configuration
 #
@@ -26,18 +26,16 @@ on:
         description: 'Mode of trigger - interactive or automatic'
         required: true
         type: string
-      direct_prompt:
+      prompt:
         description: 'Direct prompt for automatic reviews'
         required: false
         type: string
         default: ''
-      allowed_tools:
-        description: 'Custom allowed tools configuration'
+      claude_args:
+        description: 'Claude CLI arguments (e.g. --allowedTools "Bash(git status),Bash(git diff)")'
         required: false
         type: string
-        default: |
-          Bash(git status)
-          Bash(git diff)
+        default: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes:
         description: 'Timeout in minutes for the Claude execution'
         required: false
@@ -70,8 +68,10 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@beta
+        uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          direct_prompt: ${{ inputs.direct_prompt }}
-          allowed_tools: ${{ inputs.allowed_tools }}
+          prompt: ${{ inputs.prompt }}
+          claude_args: ${{ inputs.claude_args }}
+          use_sticky_comment: "true"
+          track_progress: "true"

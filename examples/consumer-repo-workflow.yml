@@ -40,12 +40,10 @@ jobs:
         contains(github.event.pull_request.body, '@Claude') ||
         contains(github.event.pull_request.body, '@CLAUDE')
       )
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v2.0.0
     with:
       trigger_mode: interactive
-      allowed_tools: |
-        Bash(git status)
-        Bash(git diff)
+      claude_args: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes: 15
       runner: ubuntu-latest
       enable_mention_detection: true  # Uses built-in @claude mention detection
@@ -57,10 +55,10 @@ jobs:
   # Automatic PR reviews (orchestrator skips when @claude mention is present by default)
   claude-automatic-review:
     if: github.event_name == 'pull_request'
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v2.0.0
     with:
       trigger_mode: automatic
-      direct_prompt: |
+      prompt: |
         Please review this pull request and provide feedback on:
         - Code quality and best practices
         - Potential bugs or issues
@@ -69,9 +67,7 @@ jobs:
         - Test coverage
 
         Be constructive and helpful in your feedback.
-      allowed_tools: |
-        Bash(git status)
-        Bash(git diff)
+      claude_args: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes: 15
       runner: ubuntu-latest
       enable_mention_detection: false  # No mention detection for automatic reviews

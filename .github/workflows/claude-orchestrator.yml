@@ -24,17 +24,15 @@ on:
         description: 'Trigger mode: interactive or automatic'
         required: true
         type: string
-      direct_prompt:
+      prompt:
         description: 'Direct prompt for automatic mode'
         required: false
         type: string
-      allowed_tools:
-        description: 'Allowed tools configuration'
+      claude_args:
+        description: 'Claude CLI arguments (e.g. --allowedTools "Bash(git status),Bash(git diff)")'
         required: false
         type: string
-        default: |
-          Bash(git status)
-          Bash(git diff)
+        default: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes:
         description: 'Timeout in minutes for Claude execution'
         required: false
@@ -118,8 +116,8 @@ jobs:
     uses: ./.github/workflows/claude-executor.yml
     with:
       trigger_mode: ${{ inputs.trigger_mode }}
-      direct_prompt: ${{ inputs.direct_prompt }}
-      allowed_tools: ${{ inputs.allowed_tools }}
+      prompt: ${{ inputs.prompt }}
+      claude_args: ${{ inputs.claude_args }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}
     secrets:
