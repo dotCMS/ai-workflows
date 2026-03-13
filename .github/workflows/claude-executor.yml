@@ -68,6 +68,9 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Debug token identity
+        run: gh auth status
+        
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@beta
