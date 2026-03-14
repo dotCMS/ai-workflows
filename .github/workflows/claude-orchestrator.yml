@@ -24,17 +24,15 @@ on:
         description: 'Trigger mode: interactive or automatic'
         required: true
         type: string
-      direct_prompt:
+      prompt:
         description: 'Direct prompt for automatic mode'
         required: false
         type: string
-      allowed_tools:
-        description: 'Allowed tools configuration'
+      claude_args:
+        description: 'Claude CLI arguments (e.g. --allowedTools "Bash(git status),Bash(git diff)")'
         required: false
         type: string
-        default: |
-          Bash(git status)
-          Bash(git diff)
+        default: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes:
         description: 'Timeout in minutes for Claude execution'
         required: false
@@ -47,6 +45,11 @@ on:
         default: 'ubuntu-latest'
       enable_mention_detection:
         description: 'Enable automatic @claude mention detection for interactive mode'
+        required: false
+        type: boolean
+        default: true
+      skip_automatic_when_mentioned:
+        description: 'Skip automatic mode when PR title/body contains @claude mention'
         required: false
         type: boolean
         default: true
@@ -96,12 +99,25 @@ jobs:
             contains(github.event.pull_request.body, '@CLAUDE')
           ))
         )
-      ) || inputs.trigger_mode == 'automatic'
+      ) || (
+        inputs.trigger_mode == 'automatic' && (
+          inputs.skip_automatic_when_mentioned == false || (
+            github.event_name != 'pull_request' || (
+              !contains(github.event.pull_request.title, '@claude') &&
+              !contains(github.event.pull_request.title, '@Claude') &&
+              !contains(github.event.pull_request.title, '@CLAUDE') &&
+              !contains(github.event.pull_request.body, '@claude') &&
+              !contains(github.event.pull_request.body, '@Claude') &&
+              !contains(github.event.pull_request.body, '@CLAUDE')
+            )
+          )
+        )
+      )
     uses: ./.github/workflows/claude-executor.yml
     with:
       trigger_mode: ${{ inputs.trigger_mode }}
-      direct_prompt: ${{ inputs.direct_prompt }}
-      allowed_tools: ${{ inputs.allowed_tools }}
+      prompt: ${{ inputs.prompt }}
+      claude_args: ${{ inputs.claude_args }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}
     secrets:

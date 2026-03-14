@@ -91,6 +91,15 @@ Consumer repositories handle their own webhook triggers and conditional logic, t
 ```yaml
 jobs:
   claude-interactive:
+    if: |
+      github.event_name != 'pull_request' || (
+        contains(github.event.pull_request.title, '@claude') ||
+        contains(github.event.pull_request.title, '@Claude') ||
+        contains(github.event.pull_request.title, '@CLAUDE') ||
+        contains(github.event.pull_request.body, '@claude') ||
+        contains(github.event.pull_request.body, '@Claude') ||
+        contains(github.event.pull_request.body, '@CLAUDE')
+      )
     uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
     with:
       trigger_mode: interactive
@@ -110,6 +119,7 @@ jobs:
     with:
       trigger_mode: automatic
       enable_mention_detection: false
+      skip_automatic_when_mentioned: true  # Default; avoids overlap with @claude PR mentions
       direct_prompt: |
         Please review this pull request for code quality and security.
       allowed_tools: |
@@ -137,6 +147,13 @@ jobs:
 ```
 
 See `examples/` directory for complete working examples.
+
+### Dual invocation troubleshooting
+
+If interactive and automatic jobs exist in the same consumer workflow:
+- Add a job-level `if` guard to the interactive job so non-mention PR open/sync events do not invoke it.
+- Keep automatic job scoped to `pull_request`.
+- Use `skip_automatic_when_mentioned: true` (default) so automatic mode does not overlap when PR title/body includes `@claude`.
 
 ## Deployment Guard Workflow
 
@@ -188,4 +205,3 @@ Sophisticated version comparison supporting dotCMS format: `YY.MM.DD[-REBUILD][_
 - **CLAUDE_WORKFLOW_MIGRATION.md**: Step-by-step migration guide from pilot workflows
 - **.cursor/rules/**: Modular development rules covering terminal commands, git workflow, release process, error prevention, and collaboration patterns
 - **examples/**: Working examples for general-purpose, infrastructure, and advanced custom triggers
-

@@ -31,7 +31,7 @@ on:
 jobs:
   # Example 1: Custom trigger for urgent issues only
   claude-urgent-issues:
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v2.0.0
     with:
       trigger_mode: interactive
       # Custom condition: Only trigger for issues labeled as "urgent" or "critical"
@@ -41,9 +41,7 @@ jobs:
           contains(github.event.issue.labels.*.name, 'critical') ||
           contains(github.event.issue.labels.*.name, 'P0')
         )
-      allowed_tools: |
-        Bash(git status)
-        Bash(git diff)
+      claude_args: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes: 10
       runner: ubuntu-latest
       enable_mention_detection: false  # Disable default @claude detection since we have custom logic
@@ -52,7 +50,7 @@ jobs:
 
   # Example 2: Custom trigger for specific file changes
   claude-config-changes:
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v2.0.0
     with:
       trigger_mode: automatic
       # Custom condition: Only trigger for PRs that modify configuration files
@@ -62,17 +60,14 @@ jobs:
           contains(github.event.pull_request.body, 'configuration') ||
           github.event.pull_request.changed_files > 10
         )
-      direct_prompt: |
-        This PR appears to modify configuration files or has many changes. 
+      prompt: |
+        This PR appears to modify configuration files or has many changes.
         Please review for:
         - Configuration syntax and validity
         - Potential breaking changes
         - Security implications of config changes
         - Impact on existing functionality
-      allowed_tools: |
-        Bash(git status)
-        Bash(git diff)
-        Bash(grep -r "config" .)
+      claude_args: '--allowedTools "Bash(git status),Bash(git diff),Bash(grep -r \"config\" .)"'
       timeout_minutes: 15
       runner: ubuntu-latest
       enable_mention_detection: false
@@ -81,7 +76,7 @@ jobs:
 
   # Example 3: Custom trigger combining multiple conditions
   claude-security-review:
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v2.0.0
     with:
       trigger_mode: automatic
       # Custom condition: Security-related changes or mentions
@@ -96,17 +91,14 @@ jobs:
           contains(github.event.comment.body, 'security review') ||
           contains(github.event.comment.body, '@security-team')
         ))
-      direct_prompt: |
+      prompt: |
         This appears to be a security-related change. Please provide a thorough security review focusing on:
         - Authentication and authorization mechanisms
         - Input validation and sanitization
         - Potential security vulnerabilities
         - Compliance with security best practices
         - Impact on existing security controls
-      allowed_tools: |
-        Bash(git status)
-        Bash(git diff)
-        Bash(grep -r "password\|token\|secret\|key" . --exclude-dir=.git)
+      claude_args: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes: 20
       runner: ubuntu-latest
       enable_mention_detection: false
@@ -115,13 +107,11 @@ jobs:
 
   # Example 4: Fallback with default @claude mention detection
   claude-general:
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v2.0.0
     with:
       trigger_mode: interactive
       # No custom condition - will use default @claude mention detection
-      allowed_tools: |
-        Bash(git status)
-        Bash(git diff)
+      claude_args: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes: 15
       runner: ubuntu-latest
       enable_mention_detection: true  # Use default @claude mention detection
