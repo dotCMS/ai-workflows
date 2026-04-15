@@ -13,6 +13,7 @@
 # - Configures the anthropics/claude-code-action with configurable claude_args
 # - Handles the actual Claude AI interaction
 # - Provides a single source of truth for Claude execution configuration
+# - Gracefully skips when the Claude API is unavailable (5xx / network errors)
 #
 # USAGE: Called by orchestrator workflows with different parameters
 # for interactive vs automatic modes and different tool configurations.
@@ -66,8 +67,44 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Pre-flight check: verify the Claude API is reachable before attempting execution.
+      # Treats 5xx responses and network failures as "unavailable" and skips gracefully.
+      # Auth errors (401/403) and rate limits (429) still proceed so the action can surface them.
+      - name: Check Claude API availability
+        id: api-check
+        run: |
+          echo "Checking Claude API availability..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 15 \
+            --retry 2 \
+            --retry-delay 3 \
+            -H "x-api-key: ${{ secrets.ANTHROPIC_API_KEY }}" \
+            -H "anthropic-version: 2023-06-01" \
+            "https://api.anthropic.com/v1/models" 2>/dev/null) || HTTP_CODE="000"
+
+          echo "API response code: $HTTP_CODE"
+
+          case "$HTTP_CODE" in
+            200)
+              echo "available=true" >> "$GITHUB_OUTPUT"
+              echo "✅ Claude API is available"
+              ;;
+            500|503|529|000)
+              echo "available=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::Claude AI service is unavailable (HTTP $HTTP_CODE). Skipping Claude Code step. Check https://status.anthropic.com"
+              ;;
+            *)
+              # For auth errors (401/403), rate limits (429), or unexpected codes:
+              # proceed and let the action report the specific error.
+              echo "available=true" >> "$GITHUB_OUTPUT"
+              echo "HTTP $HTTP_CODE received — proceeding with Claude execution"
+              ;;
+          esac
+
       - name: Run Claude Code
         id: claude
+        if: steps.api-check.outputs.available == 'true'
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -75,3 +112,37 @@ jobs:
           claude_args: ${{ inputs.claude_args }}
           use_sticky_comment: "true"
           track_progress: "true"
+
+      # If the Claude step failed at runtime, re-check the API to determine whether
+      # the failure was caused by service degradation (skip gracefully) or a real error
+      # (fail the job so the team is alerted).
+      - name: Handle Claude execution result
+        if: steps.api-check.outputs.available == 'true' && steps.claude.outcome == 'failure'
+        run: |
+          echo "Claude Code step failed. Checking if this is due to service unavailability..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 10 \
+            -H "x-api-key: ${{ secrets.ANTHROPIC_API_KEY }}" \
+            -H "anthropic-version: 2023-06-01" \
+            "https://api.anthropic.com/v1/models" 2>/dev/null) || HTTP_CODE="000"
+
+          echo "Post-execution API check: HTTP $HTTP_CODE"
+
+          case "$HTTP_CODE" in
+            200)
+              echo "::error::Claude Code step failed and the API is currently reachable — this appears to be a legitimate error. Review the logs above."
+              exit 1
+              ;;
+            *)
+              echo "::warning::Claude Code step failed due to API service degradation (HTTP $HTTP_CODE). Skipping gracefully."
+              echo "For current service status, visit: https://status.anthropic.com"
+              ;;
+          esac
+
+      - name: Claude service unavailable — step skipped
+        if: steps.api-check.outputs.available != 'true'
+        run: |
+          echo "::warning::Claude AI Orchestrator was skipped because the Claude API is currently unavailable."
+          echo "The pipeline continues normally. Claude review will run on the next PR push when the service is restored."
+          echo ""
+          echo "For current service status, visit: https://status.anthropic.com"
