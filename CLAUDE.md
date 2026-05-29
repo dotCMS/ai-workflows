@@ -260,6 +260,7 @@ Sophisticated version comparison supporting dotCMS format: `YY.MM.DD[-REBUILD][_
 ## Important Files
 
 - **ARCHITECTURE.md**: Deep dive into workflow architecture and why consumer-handled triggers are necessary
+- **AI_TOOLCHAIN_ARCHITECTURE.md**: Toolchain-wide diagram (GitHub, Claude Code/Chat/Co-Work, Anthropic Action, dotCMS Action, Bedrock, LLM layer) — shows where this repo's workflows sit relative to the rest of the AI toolchain and where we have flexibility vs. vendor lock-in
 - **CLAUDE_WORKFLOW_MIGRATION.md**: Step-by-step migration guide from pilot workflows
 - **.cursor/rules/**: Modular development rules covering terminal commands, git workflow, release process, error prevention, and collaboration patterns
 - **examples/**: Working examples for general-purpose, infrastructure, and advanced custom triggers
