@@ -142,7 +142,7 @@ Includes a pre-flight API health check on the `anthropic-api` path that skips gr
 
 #### 3. `bedrock-generic-executor.yml` (any non-Anthropic Bedrock model) — **new in v3**
 
-Uses the Bedrock Converse API, which is model-family-agnostic. Maintains its own sticky comment via `.github/scripts/sticky-comment.sh`, replicating the auto-update behavior `claude-code-action` provides for free on the Anthropic path. Accepts a `sticky_namespace` input so multiple review jobs on the same PR don't clobber each other.
+Uses the Bedrock Converse API, which is model-family-agnostic. Maintains its own sticky comment via an inline helper (a setup step writes a bash find-or-update helper to `/tmp` so the logic isn't dependent on the consumer's checkout), replicating the auto-update behavior `claude-code-action` provides for free on the Anthropic path. Accepts a `sticky_namespace` input so multiple review jobs on the same PR don't clobber each other.
 
 ---
 

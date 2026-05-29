@@ -96,16 +96,76 @@ jobs:
           role-to-assume: ${{ inputs.bedrock_role_arn }}
           aws-region: ${{ inputs.aws_region }}
 
+      # Inlined here because this is a reusable workflow: actions/checkout above
+      # checks out the *consumer's* repo, not this one, so any relative path like
+      # .github/scripts/sticky-comment.sh would resolve against the consumer (and
+      # would not exist for external consumers). Writing to /tmp avoids the
+      # cross-repo path dependency.
+      - name: Set up sticky-comment helper
+        run: |
+          cat > /tmp/sticky-comment.sh <<'STICKY_EOF'
+          #!/usr/bin/env bash
+          # Find-or-update a single PR comment identified by STICKY_MARKER.
+          # Usage: sticky-comment.sh <pr_number> <body_file>
+          # Env:   GH_TOKEN, GITHUB_REPOSITORY, STICKY_MARKER
+          set -euo pipefail
+          PR_NUMBER="${1:?pr number required}"
+          BODY_FILE="${2:?body file required}"
+          : "${GH_TOKEN:?GH_TOKEN must be set}"
+          : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
+          : "${STICKY_MARKER:?STICKY_MARKER must be set}"
+          [ -r "$BODY_FILE" ] || { echo "Body file not readable: $BODY_FILE" >&2; exit 1; }
+          EXISTING_ID=$(
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+              | jq -r --arg marker "$STICKY_MARKER" \
+                  '.[] | select(.body | startswith($marker)) | .id' \
+              | head -1
+          )
+          if [ -n "$EXISTING_ID" ] && ! [[ "$EXISTING_ID" =~ ^[0-9]+$ ]]; then
+            echo "::warning::EXISTING_ID is non-numeric ($EXISTING_ID); creating a new comment instead"
+            EXISTING_ID=""
+          fi
+          PAYLOAD=$(jq -Rs --arg key body '{($key): .}' < "$BODY_FILE")
+          if [ -n "$EXISTING_ID" ]; then
+            echo "Updating existing sticky comment $EXISTING_ID"
+            echo "$PAYLOAD" | gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_ID}" \
+              -X PATCH --input -
+          else
+            echo "Creating new sticky comment on PR #${PR_NUMBER}"
+            echo "$PAYLOAD" | gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -X POST --input -
+          fi
+          STICKY_EOF
+          chmod +x /tmp/sticky-comment.sh
+
       - name: Resolve PR number
         id: pr
+        env:
+          # github.event.issue.pull_request is present only when issue_comment fires on a PR;
+          # we use its presence (URL string) as the discriminator.
+          ISSUE_PR_URL: ${{ github.event.issue.pull_request.url }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] || [ "${GITHUB_EVENT_NAME}" = "pull_request_target" ]; then
-            PR_NUM="${{ github.event.pull_request.number }}"
-          else
-            echo "::error::bedrock-generic-executor currently only supports pull_request events; got ${GITHUB_EVENT_NAME}"
-            exit 1
-          fi
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request|pull_request_target|pull_request_review|pull_request_review_comment)
+              PR_NUM="${{ github.event.pull_request.number }}"
+              ;;
+            issue_comment)
+              # issue_comment fires on both issues and PRs. For PRs, the issue payload
+              # has a .pull_request object; for plain issues, it's absent. Reuse the
+              # issue number (which equals the PR number on GitHub).
+              if [ -n "${ISSUE_PR_URL}" ]; then
+                PR_NUM="${{ github.event.issue.number }}"
+              else
+                echo "::error::bedrock-generic-executor needs a PR context; issue_comment fired on a non-PR issue"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::bedrock-generic-executor doesn't support event type: ${GITHUB_EVENT_NAME}"
+              exit 1
+              ;;
+          esac
           if ! [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
             echo "::error::Resolved PR number is not a positive integer: ${PR_NUM}"
             exit 1
@@ -124,7 +184,7 @@ jobs:
             printf "🔄 **Bedrock review in progress** — model: \`%s\`\n\n" "${MODEL_ID}"
             printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
-          .github/scripts/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
+          /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
 
       - name: Gather PR diff
         id: diff
@@ -191,7 +251,7 @@ jobs:
             printf "\n\n---\n"
             printf "<sub>Run: [#%s](%s) · tokens: %s</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}" "${USAGE}"
           } > /tmp/comment.md
-          .github/scripts/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
+          /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
 
       - name: Report failure into sticky comment
         if: failure() && steps.invoke.outputs.has_review != 'true'
@@ -207,4 +267,4 @@ jobs:
             printf "The review job failed before producing output. See the run for details.\n\n"
             printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
-          .github/scripts/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
+          /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md

@@ -14,7 +14,7 @@ The repository implements a reusable workflow architecture with model-aware rout
 
 - **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): Lightweight wrapper that handles @claude mention detection AND routes to the appropriate executor based on `model_id`. Consumer repositories call this with `trigger_mode: interactive` or `trigger_mode: automatic`. Exactly one executor runs per call.
 - **Claude Executor** (`.github/workflows/claude-executor.yml`): Execution engine for Anthropic models — runs `anthropics/claude-code-action@v1` either against the direct Anthropic API (`provider: anthropic-api`, default) or via AWS Bedrock (`provider: anthropic-bedrock`, OIDC + `use_bedrock=true`).
-- **Bedrock Generic Executor** (`.github/workflows/bedrock-generic-executor.yml`): Execution engine for **any non-Anthropic Bedrock model** (Amazon Nova, Meta Llama, Mistral, Cohere, AI21). Uses the Bedrock Converse API and maintains its own sticky comment via `.github/scripts/sticky-comment.sh`.
+- **Bedrock Generic Executor** (`.github/workflows/bedrock-generic-executor.yml`): Execution engine for **any non-Anthropic Bedrock model** (Amazon Nova, Meta Llama, Mistral, Cohere, AI21). Uses the Bedrock Converse API and maintains its own sticky comment via an inlined helper (set up to `/tmp` at job start, so no cross-repo path dependency).
 - **Deployment Guard** (`.github/workflows/deployment-guard.yml`): Reusable workflow for validating deployment changes with configurable rules. Features organization-based bypass for trusted members, file allowlist validation, image-only change detection, and comprehensive image validation (format, repository, version pattern, registry existence, anti-downgrade logic).
 
 ### Multi-model Routing (v3)
@@ -33,7 +33,7 @@ The match for the Anthropic family is anchored: `^([a-z]+\.)?anthropic\.` — so
 ### Sticky Comments
 
 - The Anthropic path's sticky comment is managed by `anthropics/claude-code-action@v1` via `use_sticky_comment: "true"`.
-- The Bedrock generic path manages its own sticky comment via `.github/scripts/sticky-comment.sh`, keyed by a marker `<!-- dotcms-ai-review:v3:<namespace> -->`. The namespace defaults to the model family; consumers can pass `sticky_namespace` to avoid collisions when running multiple review jobs on the same PR.
+- The Bedrock generic path manages its own sticky comment via an inlined find-or-update helper (written to `/tmp` at job start), keyed by a marker `<!-- dotcms-ai-review:v3:<namespace> -->`. The namespace defaults to the model family; consumers can pass `sticky_namespace` to avoid collisions when running multiple review jobs on the same PR.
 
 ### Critical Architectural Insight
 
@@ -54,9 +54,6 @@ python -c "import yaml; yaml.safe_load(open('.github/workflows/claude-orchestrat
 python -c "import yaml; yaml.safe_load(open('.github/workflows/claude-executor.yml'))"
 python -c "import yaml; yaml.safe_load(open('.github/workflows/bedrock-generic-executor.yml'))"
 python -c "import yaml; yaml.safe_load(open('.github/workflows/deployment-guard.yml'))"
-
-# Shellcheck the sticky-comment helper
-docker run --rm -v "${PWD}:/repo" -w /repo koalaman/shellcheck:stable .github/scripts/sticky-comment.sh
 
 # Run automated tests
 # Tests are defined in .github/workflows/tests.yml and run automatically on PR/push to main
