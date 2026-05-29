@@ -156,12 +156,15 @@ jobs:
 
       - name: Compose claude_args with model
         id: args
+        env:
+          # Use env to safely transport values containing shell metacharacters
+          # (e.g. claude_args default includes embedded double-quotes).
+          BASE_ARGS: ${{ inputs.claude_args }}
+          MODEL_ID: ${{ inputs.model_id }}
         run: |
           set -euo pipefail
           # The action does NOT accept `model:` as an input — model must be in claude_args.
           # We prepend --model so consumer-supplied claude_args can override it if needed.
-          BASE_ARGS="${{ inputs.claude_args }}"
-          MODEL_ID="${{ inputs.model_id }}"
           if [ -n "${MODEL_ID}" ]; then
             COMPOSED=$(printf -- "--model %s\n%s" "${MODEL_ID}" "${BASE_ARGS}")
           else
