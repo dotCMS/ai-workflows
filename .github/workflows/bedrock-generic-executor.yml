@@ -1,0 +1,210 @@
+---
+# Bedrock Generic Executor Workflow (Reusable)
+#
+# PURPOSE: Reviews PRs using ANY Bedrock model via the Converse API. Maintains a
+# sticky comment that auto-updates on subsequent pushes — replicating the feature
+# anthropics/claude-code-action provides for free in the Anthropic-specific path.
+#
+# WHEN TO USE: When you want to review with a non-Anthropic Bedrock model
+# (Amazon Nova, Meta Llama, Mistral, Cohere, AI21, etc.). For Anthropic models,
+# claude-executor.yml is more featureful (agentic tool loop, allowed tools).
+#
+# ROUTING: claude-orchestrator.yml selects this executor automatically based on
+# the model_id input. Consumers shouldn't usually call it directly.
+#
+# REQUIREMENTS: The caller's repo must have id-token: write permission and a
+# Bedrock-capable IAM role accessible via OIDC. See MULTI_MODEL_DESIGN.md.
+
+name: Bedrock Generic Executor (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      model_id:
+        description: 'Bedrock model ID (inference-profile form, e.g. us.amazon.nova-pro-v1:0)'
+        required: true
+        type: string
+      bedrock_role_arn:
+        description: 'IAM role ARN that GitHub Actions assumes via OIDC to call Bedrock'
+        required: true
+        type: string
+      aws_region:
+        description: 'AWS region for the Bedrock API'
+        required: false
+        type: string
+        default: 'us-east-1'
+      prompt:
+        description: 'Review prompt sent to the model along with the PR diff'
+        required: false
+        type: string
+        default: |
+          Review this PR diff. Flag anything that looks wrong, risky, or worth a second look:
+          bad assumptions, missing edge cases, design problems, security issues. Skip praise.
+          If it is clean, say so in one line.
+      sticky_namespace:
+        description: 'Namespace appended to the sticky-comment marker to keep multiple review jobs from clobbering each other (e.g. "backend-reviewer"). Defaults to the model family.'
+        required: false
+        type: string
+        default: ''
+      max_diff_chars:
+        description: 'Maximum diff length to send to the model (chars). Larger diffs are truncated at a line boundary.'
+        required: false
+        type: number
+        default: 80000
+      max_output_tokens:
+        description: 'Maximum tokens the model may emit'
+        required: false
+        type: number
+        default: 2048
+      timeout_minutes:
+        description: 'Job timeout in minutes'
+        required: false
+        type: number
+        default: 15
+      runner:
+        description: 'GitHub runner label'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+
+jobs:
+  review:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      id-token: write       # OIDC -> STS
+      contents: read
+      pull-requests: write  # post / update sticky comment
+    env:
+      MODEL_ID: ${{ inputs.model_id }}
+      AWS_REGION: ${{ inputs.aws_region }}
+      MAX_DIFF_CHARS: ${{ inputs.max_diff_chars }}
+      MAX_OUTPUT_TOKENS: ${{ inputs.max_output_tokens }}
+      # Namespacing prevents collisions when a repo runs multiple review jobs on
+      # the same PR (e.g. a backend-only review + a frontend-only review). The
+      # default uses the model family so different models naturally get
+      # different stickies.
+      STICKY_MARKER: ${{ format('<!-- dotcms-ai-review:v3:{0} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.bedrock_role_arn }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Resolve PR number
+        id: pr
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] || [ "${GITHUB_EVENT_NAME}" = "pull_request_target" ]; then
+            PR_NUM="${{ github.event.pull_request.number }}"
+          else
+            echo "::error::bedrock-generic-executor currently only supports pull_request events; got ${GITHUB_EVENT_NAME}"
+            exit 1
+          fi
+          if ! [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Resolved PR number is not a positive integer: ${PR_NUM}"
+            exit 1
+          fi
+          echo "number=${PR_NUM}" >> "$GITHUB_OUTPUT"
+
+      - name: Post in-progress sticky comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            printf "%s\n\n" "${STICKY_MARKER}"
+            printf "🔄 **Bedrock review in progress** — model: \`%s\`\n\n" "${MODEL_ID}"
+            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+          } > /tmp/comment.md
+          .github/scripts/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
+
+      - name: Gather PR diff
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh pr diff "${PR_NUMBER}" > /tmp/pr.diff
+          ORIG=$(wc -c < /tmp/pr.diff)
+          if [ "${ORIG}" -gt "${MAX_DIFF_CHARS}" ]; then
+            # Truncate at the last complete line before the byte cap so we
+            # don't hand the model a half-line of context.
+            head -c "${MAX_DIFF_CHARS}" /tmp/pr.diff | sed '$d' > /tmp/pr.diff.trimmed
+            printf "\n\n[TRUNCATED — diff was %s chars, kept first ~%s]\n" "${ORIG}" "${MAX_DIFF_CHARS}" >> /tmp/pr.diff.trimmed
+            mv /tmp/pr.diff.trimmed /tmp/pr.diff
+          fi
+          echo "diff_chars=$(wc -c < /tmp/pr.diff)" >> "$GITHUB_OUTPUT"
+
+      - name: Invoke Bedrock (Converse API)
+        id: invoke
+        env:
+          REVIEW_PROMPT: ${{ inputs.prompt }}
+        run: |
+          set -euo pipefail
+          {
+            printf "%s\n\n" "${REVIEW_PROMPT}"
+            printf -- "--- BEGIN DIFF ---\n"
+            cat /tmp/pr.diff
+            printf -- "\n--- END DIFF ---\n"
+          } > /tmp/prompt.txt
+
+          jq -Rs '[{role:"user",content:[{text:.}]}]' < /tmp/prompt.txt > /tmp/messages.json
+          jq -n '[{"text":"You are a senior code reviewer. Output GitHub-flavored markdown. Be concise."}]' > /tmp/system.json
+          jq -n --argjson max "${MAX_OUTPUT_TOKENS}" '{maxTokens:$max,temperature:0.2}' > /tmp/inference.json
+
+          aws bedrock-runtime converse \
+            --model-id "${MODEL_ID}" \
+            --messages file:///tmp/messages.json \
+            --system file:///tmp/system.json \
+            --inference-config file:///tmp/inference.json \
+            > /tmp/converse.json
+
+          jq -r '.output.message.content[0].text' /tmp/converse.json > /tmp/review.md
+          jq -r '.usage | "in: \(.inputTokens) · out: \(.outputTokens) · total: \(.totalTokens)"' \
+            /tmp/converse.json > /tmp/usage.txt
+          echo "Tokens: $(cat /tmp/usage.txt)"
+          # Step-output flag for downstream gating (hashFiles() can't see /tmp).
+          echo "has_review=true" >> "$GITHUB_OUTPUT"
+
+      - name: Update sticky comment with review
+        if: steps.invoke.outputs.has_review == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          USAGE=$(cat /tmp/usage.txt)
+          RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            printf "%s\n\n" "${STICKY_MARKER}"
+            printf "## 🤖 Bedrock Review — \`%s\`\n\n" "${MODEL_ID}"
+            cat /tmp/review.md
+            printf "\n\n---\n"
+            printf "<sub>Run: [#%s](%s) · tokens: %s</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}" "${USAGE}"
+          } > /tmp/comment.md
+          .github/scripts/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
+
+      - name: Report failure into sticky comment
+        if: failure() && steps.invoke.outputs.has_review != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            printf "%s\n\n" "${STICKY_MARKER}"
+            printf "## ❌ Bedrock Review failed — \`%s\`\n\n" "${MODEL_ID}"
+            printf "The review job failed before producing output. See the run for details.\n\n"
+            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+          } > /tmp/comment.md
+          .github/scripts/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
