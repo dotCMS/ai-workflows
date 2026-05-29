@@ -81,29 +81,24 @@ flowchart TD
         route{"route job<br/>inspect model_id"}
         claude_exec["claude-executor.yml<br/>(Anthropic models)"]
         generic_exec["bedrock-generic-executor.yml<br/>(any other Bedrock model)"]
-        sticky[".github/scripts/sticky-comment.sh<br/>(find-or-update marker)"]
 
         orch --> route
         route -->|"empty or *.anthropic.*"| claude_exec
         route -->|"anything else"| generic_exec
-        generic_exec -.uses.-> sticky
     end
 
     subgraph upstreams["External calls"]
         anth_api["Anthropic API<br/>(api.anthropic.com)"]
         bedrock["AWS Bedrock<br/>(Converse / claude-code-action use_bedrock)"]
-        gh_api["GitHub API<br/>(sticky comments)"]
     end
 
     consumer_wf -->|"workflow_call"| orch
     claude_exec -->|"provider=anthropic-api"| anth_api
     claude_exec -->|"provider=anthropic-bedrock<br/>via OIDC"| bedrock
     generic_exec -->|"OIDC + Converse"| bedrock
-    claude_exec -.->|"use_sticky_comment"| gh_api
-    generic_exec -.->|"sticky-comment.sh"| gh_api
 
     classDef new fill:#e8f5e9,stroke:#1b5e20,stroke-width:1px
-    class generic_exec,sticky,route new
+    class generic_exec,route new
 ```
 
 Nodes shaded green are new in v3. The `route` job uses an anchored regex (`^([a-z]+\.)?anthropic\.`) so model IDs that merely contain the substring `"anthropic."` (e.g. `us.not-anthropic.foo`) are **not** misrouted.
