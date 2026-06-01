@@ -210,6 +210,11 @@ jobs:
           REVIEW_PROMPT: ${{ inputs.prompt }}
         run: |
           set -euo pipefail
+          # workflow_call always passes the caller's value, even when empty, so the
+          # input default above is never reached from the orchestrator. Fall back here.
+          if [ -z "${REVIEW_PROMPT}" ]; then
+            REVIEW_PROMPT="Review this PR diff. Flag anything that looks wrong, risky, or worth a second look: bad assumptions, missing edge cases, design problems, security issues. Skip praise. If it is clean, say so in one line."
+          fi
           {
             printf "%s\n\n" "${REVIEW_PROMPT}"
             printf -- "--- BEGIN DIFF ---\n"
