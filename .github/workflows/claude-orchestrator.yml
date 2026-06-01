@@ -1,19 +1,23 @@
 ---
-# Claude Orchestrator Workflow (Reusable) 
+# Claude Orchestrator Workflow (Reusable)
 #
-# PURPOSE: This workflow orchestrates Claude AI interactions by providing
-# a simple, reliable interface to the claude-executor. Consumer repositories
-# handle their own webhook triggers and call this workflow.
+# PURPOSE: This workflow orchestrates Claude AI interactions across multiple
+# model providers. Routes by model_id to the appropriate executor:
 #
-# WHY: The original orchestrator design was flawed because workflow_call
-# loses the original event context. This version is a lightweight wrapper
-# that works reliably as a reusable workflow.
+#   - Empty model_id or *.anthropic.* (any inference profile)
+#       -> claude-executor.yml (existing Anthropic path; API or Bedrock)
+#   - Any other model_id (us.amazon.*, meta.*, mistral.*, cohere.*, ai21.*, ...)
+#       -> bedrock-generic-executor.yml (Bedrock Converse API + sticky comments)
 #
-# ARCHITECTURE: Consumer repositories handle webhook events and conditional
-# logic, then call this workflow with the appropriate trigger mode and configuration.
+# Exactly one executor runs per call — the route job emits a provider output
+# and each executor job gates on it.
+#
+# ARCHITECTURE: Consumer repositories handle their own webhook events and
+# conditional logic, then call this workflow with the appropriate trigger
+# mode and model configuration.
 #
 # USAGE: This is a reusable workflow that can be called from any repository
-# with repository-specific configurations.
+# with repository-specific configurations. See CLAUDE.md for examples.
 
 name: Claude Orchestrator (Reusable)
 
@@ -29,12 +33,12 @@ on:
         required: false
         type: string
       claude_args:
-        description: 'Claude CLI arguments (e.g. --allowedTools "Bash(git status),Bash(git diff)")'
+        description: 'Claude CLI arguments (e.g. --allowedTools "Bash(git status),Bash(git diff)") — applies to the Anthropic path only'
         required: false
         type: string
         default: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes:
-        description: 'Timeout in minutes for Claude execution'
+        description: 'Timeout in minutes for executor execution'
         required: false
         type: number
         default: 15
@@ -57,13 +61,36 @@ on:
         description: 'Custom condition to override default mention detection (optional)'
         required: false
         type: string
+      # --- Multi-model inputs (v3) ---
+      model_id:
+        description: 'Bedrock model ID, inference-profile form (e.g. global.anthropic.claude-sonnet-4-6, us.amazon.nova-pro-v1:0). Empty = direct Anthropic API.'
+        required: false
+        type: string
+        default: ''
+      bedrock_role_arn:
+        description: 'IAM role ARN that GitHub Actions assumes via OIDC to call Bedrock. Required when model_id is set.'
+        required: false
+        type: string
+        default: ''
+      aws_region:
+        description: 'AWS region for Bedrock calls'
+        required: false
+        type: string
+        default: 'us-east-1'
+      sticky_namespace:
+        description: 'Namespace for the sticky-comment marker on the bedrock-generic path (defaults to model family). Has no effect on the Anthropic path.'
+        required: false
+        type: string
+        default: ''
     secrets:
       ANTHROPIC_API_KEY:
-        required: true
+        description: 'Anthropic API key — required only when using the direct Anthropic API path (model_id empty)'
+        required: false
 
 jobs:
-  claude-execution:
-    # Only run if custom condition is provided OR default mention detection is enabled and mentions are found
+  route:
+    # Preserve the existing mention-detection / automatic-mode gating logic.
+    # When this job is skipped, both downstream executor jobs are also skipped.
     if: |
       inputs.custom_trigger_condition != '' || (
         inputs.enable_mention_detection == true && inputs.trigger_mode == 'interactive' && (
@@ -113,6 +140,41 @@ jobs:
           )
         )
       )
+    runs-on: ubuntu-latest
+    outputs:
+      provider: ${{ steps.detect.outputs.provider }}
+    steps:
+      - id: detect
+        env:
+          MODEL_ID: ${{ inputs.model_id }}
+          BEDROCK_ROLE_ARN: ${{ inputs.bedrock_role_arn }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MODEL_ID}" ]; then
+            # No model specified → direct Anthropic API. Bedrock role not required.
+            PROVIDER="anthropic-api"
+          # Anchored match: bare anthropic.* or inference-profile-prefixed
+          # <region>.anthropic.* (us.anthropic.*, global.anthropic.*, eu.anthropic.*).
+          # Avoids false matches on third-party model IDs that contain "anthropic." as substring.
+          elif [[ "${MODEL_ID}" =~ ^([a-z]+\.)?anthropic\. ]]; then
+            PROVIDER="anthropic-bedrock"
+          else
+            PROVIDER="bedrock-generic"
+          fi
+
+          # Validate bedrock_role_arn is present whenever we route to a Bedrock path.
+          if [ "${PROVIDER}" != "anthropic-api" ] && [ -z "${BEDROCK_ROLE_ARN}" ]; then
+            echo "::error::model_id=${MODEL_ID} requires bedrock_role_arn input"
+            exit 1
+          fi
+
+          echo "Resolved provider: ${PROVIDER}"
+          echo "provider=${PROVIDER}" >> "$GITHUB_OUTPUT"
+
+  claude-anthropic:
+    needs: route
+    # Fires for anthropic-api OR anthropic-bedrock. When route is skipped, this is too.
+    if: needs.route.outputs.provider == 'anthropic-api' || needs.route.outputs.provider == 'anthropic-bedrock'
     uses: ./.github/workflows/claude-executor.yml
     with:
       trigger_mode: ${{ inputs.trigger_mode }}
@@ -120,5 +182,22 @@ jobs:
       claude_args: ${{ inputs.claude_args }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}
+      provider: ${{ needs.route.outputs.provider }}
+      model_id: ${{ inputs.model_id }}
+      bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
+      aws_region: ${{ inputs.aws_region }}
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  bedrock-generic:
+    needs: route
+    if: needs.route.outputs.provider == 'bedrock-generic'
+    uses: ./.github/workflows/bedrock-generic-executor.yml
+    with:
+      model_id: ${{ inputs.model_id }}
+      bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
+      aws_region: ${{ inputs.aws_region }}
+      prompt: ${{ inputs.prompt }}
+      sticky_namespace: ${{ inputs.sticky_namespace }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+      runner: ${{ inputs.runner }}

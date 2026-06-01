@@ -8,13 +8,32 @@ This repository provides centralized, reusable GitHub Actions workflows for Clau
 
 ## Architecture Overview
 
-The repository implements a simple, reliable architecture with three reusable workflows:
+The repository implements a reusable workflow architecture with model-aware routing:
 
 ### Core Workflows
 
-- **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): Lightweight wrapper that handles @claude mention detection and routes to executor. Consumer repositories call this with `trigger_mode: interactive` or `trigger_mode: automatic`.
-- **Claude Executor** (`.github/workflows/claude-executor.yml`): Execution engine that runs the `anthropics/claude-code-action@beta` with configured tools, timeouts, and runners.
+- **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): Lightweight wrapper that handles @claude mention detection AND routes to the appropriate executor based on `model_id`. Consumer repositories call this with `trigger_mode: interactive` or `trigger_mode: automatic`. Exactly one executor runs per call.
+- **Claude Executor** (`.github/workflows/claude-executor.yml`): Execution engine for Anthropic models — runs `anthropics/claude-code-action@v1` either against the direct Anthropic API (`provider: anthropic-api`, default) or via AWS Bedrock (`provider: anthropic-bedrock`, OIDC + `use_bedrock=true`).
+- **Bedrock Generic Executor** (`.github/workflows/bedrock-generic-executor.yml`): Execution engine for **any non-Anthropic Bedrock model** (Amazon Nova, Meta Llama, Mistral, Cohere, AI21). Uses the Bedrock Converse API and maintains its own sticky comment via an inlined helper (set up to `/tmp` at job start, so no cross-repo path dependency).
 - **Deployment Guard** (`.github/workflows/deployment-guard.yml`): Reusable workflow for validating deployment changes with configurable rules. Features organization-based bypass for trusted members, file allowlist validation, image-only change detection, and comprehensive image validation (format, repository, version pattern, registry existence, anti-downgrade logic).
+
+### Multi-model Routing (v3)
+
+The orchestrator picks the executor by inspecting `model_id`:
+
+| `model_id` value                                  | Routed to                          | Notes                                          |
+| ------------------------------------------------- | ---------------------------------- | ---------------------------------------------- |
+| _(empty / unset)_                                 | `claude-executor` (`anthropic-api`)| Backward-compat default; requires `ANTHROPIC_API_KEY` secret |
+| `*.anthropic.*` (e.g. `global.anthropic.claude-sonnet-4-6`) | `claude-executor` (`anthropic-bedrock`) | Requires `bedrock_role_arn` input              |
+| `anthropic.*` (bare)                              | `claude-executor` (`anthropic-bedrock`) | Requires `bedrock_role_arn` input              |
+| Anything else (Nova, Llama, Mistral, …)           | `bedrock-generic-executor`          | Requires `bedrock_role_arn` input              |
+
+The match for the Anthropic family is anchored: `^([a-z]+\.)?anthropic\.` — so a model ID that merely contains the substring `anthropic.` (e.g. `us.not-anthropic.foo`) is **not** misrouted.
+
+### Sticky Comments
+
+- The Anthropic path's sticky comment is managed by `anthropics/claude-code-action@v1` via `use_sticky_comment: "true"`.
+- The Bedrock generic path manages its own sticky comment via an inlined find-or-update helper (written to `/tmp` at job start), keyed by a marker `<!-- dotcms-ai-review:v3:<namespace> -->`. The namespace defaults to the model family; consumers can pass `sticky_namespace` to avoid collisions when running multiple review jobs on the same PR.
 
 ### Critical Architectural Insight
 
@@ -33,6 +52,7 @@ docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.7
 # Validate workflow syntax
 python -c "import yaml; yaml.safe_load(open('.github/workflows/claude-orchestrator.yml'))"
 python -c "import yaml; yaml.safe_load(open('.github/workflows/claude-executor.yml'))"
+python -c "import yaml; yaml.safe_load(open('.github/workflows/bedrock-generic-executor.yml'))"
 python -c "import yaml; yaml.safe_load(open('.github/workflows/deployment-guard.yml'))"
 
 # Run automated tests
@@ -129,6 +149,41 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+**Multi-model (v3) examples:**
+
+Anthropic Sonnet 4.6 via Bedrock (no `ANTHROPIC_API_KEY` needed):
+```yaml
+  claude-bedrock:
+    permissions:
+      id-token: write      # OIDC
+      contents: read
+      pull-requests: write
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3.0.0
+    with:
+      trigger_mode: automatic
+      enable_mention_detection: false
+      prompt: Review this PR for correctness, security, and design issues.
+      model_id: global.anthropic.claude-sonnet-4-6
+      bedrock_role_arn: arn:aws:iam::123456789012:role/GitHubActions-BedrockReview
+```
+
+Amazon Nova Pro via the generic Bedrock executor:
+```yaml
+  nova-review:
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3.0.0
+    with:
+      trigger_mode: automatic
+      enable_mention_detection: false
+      prompt: Review this PR for backend Java/Spring issues.
+      model_id: us.amazon.nova-pro-v1:0
+      bedrock_role_arn: arn:aws:iam::123456789012:role/GitHubActions-BedrockReview
+      sticky_namespace: backend-reviewer   # Avoids collisions with other generic-bedrock jobs on the same PR
+```
+
 **Custom trigger conditions:**
 ```yaml
   claude-security-review:
@@ -201,7 +256,7 @@ Sophisticated version comparison supporting dotCMS format: `YY.MM.DD[-REBUILD][_
 
 ## Important Files
 
-- **ARCHITECTURE.md**: Deep dive into workflow architecture and why consumer-handled triggers are necessary
+- **ARCHITECTURE.md**: Two labeled diagrams (toolchain-wide + repo-internal v3 routing), workflow types, migration path from v2 → v3, and the reasoning behind the consumer-handles-triggers pattern
 - **CLAUDE_WORKFLOW_MIGRATION.md**: Step-by-step migration guide from pilot workflows
 - **.cursor/rules/**: Modular development rules covering terminal commands, git workflow, release process, error prevention, and collaboration patterns
 - **examples/**: Working examples for general-purpose, infrastructure, and advanced custom triggers
