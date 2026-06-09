@@ -82,6 +82,11 @@ on:
         required: false
         type: string
         default: ''
+      reasoning_effort:
+        description: 'Reasoning effort for the OpenAI/Codex (mantle) path: minimal | low | medium | high. Ignored on other paths.'
+        required: false
+        type: string
+        default: 'medium'
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key — required only when using the direct Anthropic API path (model_id empty)'
@@ -158,6 +163,11 @@ jobs:
           # Avoids false matches on third-party model IDs that contain "anthropic." as substring.
           elif [[ "${MODEL_ID}" =~ ^([a-z]+\.)?anthropic\. ]]; then
             PROVIDER="anthropic-bedrock"
+          # OpenAI GPT/Codex (openai.gpt-5.5, openai.gpt-5.4). Served only by bedrock-mantle
+          # (OpenAI Responses API), not bedrock-runtime — routed to the codex executor.
+          # Anchored like the anthropic match so "openai." as a substring can't misroute.
+          elif [[ "${MODEL_ID}" =~ ^([a-z]+\.)?openai\. ]]; then
+            PROVIDER="openai-mantle"
           else
             PROVIDER="bedrock-generic"
           fi
@@ -199,5 +209,21 @@ jobs:
       aws_region: ${{ inputs.aws_region }}
       prompt: ${{ inputs.prompt }}
       sticky_namespace: ${{ inputs.sticky_namespace }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+      runner: ${{ inputs.runner }}
+
+  codex-mantle:
+    needs: route
+    if: needs.route.outputs.provider == 'openai-mantle'
+    uses: ./.github/workflows/codex-executor.yml
+    with:
+      model_id: ${{ inputs.model_id }}
+      bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
+      # aws_region defaults to us-east-1; the codex executor remaps that to us-east-2
+      # (mantle is not offered in us-east-1). Consumers only set model_id.
+      aws_region: ${{ inputs.aws_region }}
+      prompt: ${{ inputs.prompt }}
+      sticky_namespace: ${{ inputs.sticky_namespace }}
+      reasoning_effort: ${{ inputs.reasoning_effort }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}

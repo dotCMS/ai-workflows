@@ -81,27 +81,31 @@ flowchart TD
         route{"route job<br/>inspect model_id"}
         claude_exec["claude-executor.yml<br/>(Anthropic models)"]
         generic_exec["bedrock-generic-executor.yml<br/>(any other Bedrock model)"]
+        codex_exec["codex-executor.yml<br/>(OpenAI GPT/Codex)"]
 
         orch --> route
         route -->|"empty or *.anthropic.*"| claude_exec
+        route -->|"openai.*"| codex_exec
         route -->|"anything else"| generic_exec
     end
 
     subgraph upstreams["External calls"]
         anth_api["Anthropic API<br/>(api.anthropic.com)"]
         bedrock["AWS Bedrock<br/>(Converse / claude-code-action use_bedrock)"]
+        mantle["bedrock-mantle<br/>(OpenAI Responses API, SigV4)"]
     end
 
     consumer_wf -->|"workflow_call"| orch
     claude_exec -->|"provider=anthropic-api"| anth_api
     claude_exec -->|"provider=anthropic-bedrock<br/>via OIDC"| bedrock
     generic_exec -->|"OIDC + Converse"| bedrock
+    codex_exec -->|"OIDC + SigV4 streaming"| mantle
 
     classDef new fill:#e8f5e9,stroke:#1b5e20,stroke-width:1px
-    class generic_exec,route new
+    class generic_exec,route,codex_exec new
 ```
 
-Nodes shaded green are new in v3. The `route` job uses an anchored regex (`^([a-z]+\.)?anthropic\.`) so model IDs that merely contain the substring `"anthropic."` (e.g. `us.not-anthropic.foo`) are **not** misrouted.
+Nodes shaded green are new in v3 (`codex-executor` added later for the OpenAI/mantle path). The `route` job uses anchored regexes (`^([a-z]+\.)?anthropic\.`, `^([a-z]+\.)?openai\.`) so model IDs that merely contain the substring `"anthropic."`/`"openai."` (e.g. `us.not-anthropic.foo`) are **not** misrouted.
 
 ### Routing table
 
@@ -109,9 +113,10 @@ Nodes shaded green are new in v3. The `route` job uses an anchored regex (`^([a-
 | ------------------------------------------------------------- | ------------------- | --------------------------------- |
 | _(empty)_                                                     | `anthropic-api`     | `claude-executor.yml`             |
 | `anthropic.*` or `<region>.anthropic.*`                       | `anthropic-bedrock` | `claude-executor.yml`             |
-| Anything else (`us.amazon.*`, `meta.*`, `mistral.*`, ...)     | n/a                 | `bedrock-generic-executor.yml`    |
+| `openai.*` (e.g. `openai.gpt-5.5`, `openai.gpt-5.4`)          | `openai-mantle`     | `codex-executor.yml`              |
+| Anything else (`us.amazon.*`, `meta.*`, `mistral.*`, ...)     | `bedrock-generic`   | `bedrock-generic-executor.yml`    |
 
-The non-matching executor job is **skipped** by job-level `if:` conditional, not "ran and exited" — billable runner time is zero for the skipped path.
+The non-matching executor jobs are **skipped** by job-level `if:` conditional, not "ran and exited" — billable runner time is zero for the skipped paths.
 
 ---
 
@@ -143,6 +148,17 @@ Includes a pre-flight API health check on the `anthropic-api` path that skips gr
 #### 3. `bedrock-generic-executor.yml` (any non-Anthropic Bedrock model) — **new in v3**
 
 Uses the Bedrock Converse API, which is model-family-agnostic. Maintains its own sticky comment via an inline helper (a setup step writes a bash find-or-update helper to `/tmp` so the logic isn't dependent on the consumer's checkout), replicating the auto-update behavior `claude-code-action` provides for free on the Anthropic path. Accepts a `sticky_namespace` input so multiple review jobs on the same PR don't clobber each other.
+
+#### 4. `codex-executor.yml` (OpenAI GPT/Codex via bedrock-mantle)
+
+For `openai.*` models (GPT-5.5, GPT-5.4), which are **not** on bedrock-runtime — there is no `InvokeModel`/`Converse`. They are served only by the separate **bedrock-mantle** endpoint exposing the OpenAI Responses API (`https://bedrock-mantle.{region}.api.aws/openai/v1/responses`). The executor:
+
+- Signs the request with **SigV4 using the assumed-role credentials** — signing service name `bedrock` (not `bedrock-mantle`; the IAM authorization prefix `bedrock-mantle:*` and the signing name deliberately differ). **No bearer token / Bedrock API key** is used (`AWS_BEARER_TOKEN_BEDROCK` stays unset), consistent with dotCMS's OIDC-only posture.
+- **Streams** Server-Sent Events and accumulates `response.output_text.delta` chunks. Streaming is mandatory: GPT-5.x reasons before emitting, so a non-streaming call buffers and looks like a 60–100s hang.
+- Remaps the orchestrator's `us-east-1` default to **us-east-2** (mantle is not offered in us-east-1; GPT-5.4 also accepts an explicit us-west-2).
+- Reuses the same `/tmp` sticky-comment helper and `sticky_namespace` input as the generic executor. Exposes `reasoning_effort` (default `medium`). Note `max_output_tokens` caps only the visible answer, **not** reasoning tokens.
+
+IAM: `bedrock-mantle:CreateInference` scoped by a `bedrock-mantle:Model StringLike openai.*` condition (no per-model ARNs exist on mantle). Provisioned in dotCMS/Infrastructure-as-code `bedrock-code-review/` (#7836). No AWS Marketplace subscription is required — mantle bills on-demand directly.
 
 ---
 
