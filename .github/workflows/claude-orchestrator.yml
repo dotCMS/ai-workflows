@@ -219,8 +219,9 @@ jobs:
     with:
       model_id: ${{ inputs.model_id }}
       bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
-      # aws_region defaults to us-east-1; the codex executor remaps that to us-east-2
-      # (mantle is not offered in us-east-1). Consumers only set model_id.
+      # aws_region defaults to us-east-1; the codex executor remaps that to us-east-2,
+      # where GPT-5.5/5.4 are served (the mantle endpoint exists in us-east-1 but the
+      # models do not yet). Consumers only set model_id.
       aws_region: ${{ inputs.aws_region }}
       prompt: ${{ inputs.prompt }}
       sticky_namespace: ${{ inputs.sticky_namespace }}

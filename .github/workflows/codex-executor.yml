@@ -3,9 +3,9 @@
 #
 # PURPOSE: Reviews PRs using OpenAI GPT/Codex models (GPT-5.5, GPT-5.4) served by the
 # AWS **bedrock-mantle** endpoint — a separate SigV4 service exposing the OpenAI Responses
-# API (https://bedrock-mantle.{region}.api.aws/openai/v1). These models are NOT on
-# bedrock-runtime: there is no InvokeModel/Converse, so the generic Bedrock executor cannot
-# reach them. Maintains the same auto-updating sticky comment as the other executors.
+# API (https://bedrock-mantle.{region}.api.aws/v1). These models are NOT on bedrock-runtime:
+# there is no InvokeModel/Converse, so the generic Bedrock executor cannot reach them.
+# Maintains the same auto-updating sticky comment as the other executors.
 #
 # AUTH: OIDC -> assumed role -> SigV4 (signing service name "bedrock", NOT "bedrock-mantle";
 # the IAM authorization prefix is still bedrock-mantle:*). No Bedrock API key / bearer token
@@ -17,8 +17,15 @@
 # the whole response and looks like a 60-100s hang. We stream Server-Sent Events and accumulate
 # response.output_text.delta chunks. max_output_tokens does NOT cap reasoning tokens.
 #
-# REGION: GPT-5.5 is us-east-2 only; GPT-5.4 adds us-west-2. Neither is in us-east-1 (the
-# orchestrator's default), so this executor remaps the us-east-1 default to us-east-2.
+# REGION: the bedrock-mantle ENDPOINT exists in many regions including us-east-1, BUT the
+# GPT-5.5/5.4 MODELS are currently served only in us-east-2 — verified live via the Models
+# API (us-east-1 lists gpt-oss but no gpt-5*; us-east-2 lists openai.gpt-5.5 / openai.gpt-5.4).
+# So this executor remaps the us-east-1 default to us-east-2 where the models live. GPT-5.4 is
+# also offered in us-west-2. (Re-check the Models API if AWS expands GPT-5.x to us-east-1.)
+#
+# DATA RETENTION: the Responses API defaults store=true, which retains input+output for 30
+# days in-region for previous_response_id chaining. Code review is single-shot, so we send
+# store=false for zero data retention.
 #
 # ROUTING: claude-orchestrator.yml selects this executor automatically when model_id matches
 # openai.* — consumers shouldn't usually call it directly.
@@ -41,7 +48,7 @@ on:
         required: true
         type: string
       aws_region:
-        description: 'AWS region for the mantle endpoint. us-east-1 (orchestrator default) is remapped to us-east-2, since mantle is not offered in us-east-1.'
+        description: 'AWS region for the mantle endpoint. The us-east-1 default is remapped to us-east-2, where GPT-5.5/5.4 are served (the endpoint exists in us-east-1 but the models do not yet).'
         required: false
         type: string
         default: 'us-east-1'
@@ -106,8 +113,9 @@ jobs:
           REQUESTED_REGION: ${{ inputs.aws_region }}
         run: |
           set -euo pipefail
-          # Mantle is not offered in us-east-1 (the orchestrator's default). Treat the default
-          # as "use the mantle default" so consumers only ever set model_id. An explicit
+          # The mantle endpoint exists in us-east-1, but GPT-5.5/5.4 are served only in
+          # us-east-2 (us-east-1 lists gpt-oss but no gpt-5*). Treat the us-east-1 default as
+          # "send to where the models live" so consumers only set model_id. An explicit
           # us-west-2 (valid for GPT-5.4) is honored as-is.
           REGION="${REQUESTED_REGION}"
           if [ -z "${REGION}" ] || [ "${REGION}" = "us-east-1" ]; then
@@ -181,7 +189,7 @@ jobs:
           model = os.environ["MODEL_ID"]
           max_out = int(os.environ.get("MAX_OUTPUT_TOKENS") or "2048")
           effort = os.environ.get("REASONING_EFFORT") or "medium"
-          endpoint = f"https://bedrock-mantle.{region}.api.aws/openai/v1/responses"
+          endpoint = f"https://bedrock-mantle.{region}.api.aws/v1/responses"
 
           with open("/tmp/prompt.txt", encoding="utf-8") as f:
               user_input = f.read()
@@ -193,6 +201,10 @@ jobs:
               "stream": True,
               "max_output_tokens": max_out,
               "reasoning": {"effort": effort},
+              # store=false → zero data retention. The Responses API defaults to true (retains
+              # input+output 30 days in-region for previous_response_id chaining); code review
+              # is single-shot, so we don't need state and don't want the diff retained.
+              "store": False,
           }
           payload = json.dumps(body).encode("utf-8")
 

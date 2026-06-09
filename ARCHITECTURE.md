@@ -151,11 +151,12 @@ Uses the Bedrock Converse API, which is model-family-agnostic. Maintains its own
 
 #### 4. `codex-executor.yml` (OpenAI GPT/Codex via bedrock-mantle)
 
-For `openai.*` models (GPT-5.5, GPT-5.4), which are **not** on bedrock-runtime — there is no `InvokeModel`/`Converse`. They are served only by the separate **bedrock-mantle** endpoint exposing the OpenAI Responses API (`https://bedrock-mantle.{region}.api.aws/openai/v1/responses`). The executor:
+For `openai.*` models (GPT-5.5, GPT-5.4), which are **not** on bedrock-runtime — there is no `InvokeModel`/`Converse`. They are served only by the separate **bedrock-mantle** endpoint exposing the OpenAI Responses API (`https://bedrock-mantle.{region}.api.aws/v1/responses`). The executor:
 
 - Signs the request with **SigV4 using the assumed-role credentials** — signing service name `bedrock` (not `bedrock-mantle`; the IAM authorization prefix `bedrock-mantle:*` and the signing name deliberately differ). **No bearer token / Bedrock API key** is used (`AWS_BEARER_TOKEN_BEDROCK` stays unset), consistent with dotCMS's OIDC-only posture.
 - **Streams** Server-Sent Events and accumulates `response.output_text.delta` chunks. Streaming is mandatory: GPT-5.x reasons before emitting, so a non-streaming call buffers and looks like a 60–100s hang.
-- Remaps the orchestrator's `us-east-1` default to **us-east-2** (mantle is not offered in us-east-1; GPT-5.4 also accepts an explicit us-west-2).
+- Remaps the orchestrator's `us-east-1` default to **us-east-2**, where GPT-5.5/5.4 are served. The mantle *endpoint* exists in us-east-1, but the *models* are not there yet (verified via the Models API: us-east-1 lists gpt-oss but no gpt-5*). GPT-5.4 also accepts an explicit us-west-2.
+- Sends `store: false` on each request for **zero data retention** — the Responses API otherwise defaults `store: true`, retaining input+output for 30 days in-region for `previous_response_id` chaining, which single-shot review doesn't need.
 - Reuses the same `/tmp` sticky-comment helper and `sticky_namespace` input as the generic executor. Exposes `reasoning_effort` (default `medium`). Note `max_output_tokens` caps only the visible answer, **not** reasoning tokens.
 
 IAM: `bedrock-mantle:CreateInference` scoped by a `bedrock-mantle:Model StringLike openai.*` condition (no per-model ARNs exist on mantle). Provisioned in dotCMS/Infrastructure-as-code `bedrock-code-review/` (#7836). No AWS Marketplace subscription is required — mantle bills on-demand directly.
