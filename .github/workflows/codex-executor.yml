@@ -137,6 +137,11 @@ jobs:
           role-to-assume: ${{ inputs.bedrock_role_arn }}
           aws-region: ${{ steps.region.outputs.region }}
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
       # Inlined because actions/checkout above checks out the *consumer's* repo, not this one,
       # so a relative script path would resolve against the consumer (and not exist for
       # external consumers). Writing to /tmp avoids the cross-repo path dependency.
@@ -181,8 +186,14 @@ jobs:
         run: |
           cat > /tmp/mantle_review.py <<'PY_EOF'
           #!/usr/bin/env python3
+          # /// script
+          # requires-python = ">=3.9"
+          # dependencies = ["openai>=1.66", "aws-bedrock-token-generator>=1.0"]
+          # ///
           # Review a PR diff via the OpenAI Responses API on bedrock-mantle, using the OpenAI
           # SDK with a SHORT-TERM Bedrock bearer token minted from the assumed-role session.
+          # Dependencies are declared above as PEP 723 inline metadata; `uv run` provisions
+          # them (and Python) into an ephemeral, cached environment — no system pip install.
           import os, sys
           from aws_bedrock_token_generator import provide_token
           from openai import OpenAI
@@ -334,12 +345,11 @@ jobs:
           MANTLE_REGION: ${{ steps.region.outputs.region }}
         run: |
           set -euo pipefail
-          # OpenAI SDK (Responses API client) + the AWS token generator (mints the short-term
-          # bearer; pulls botocore for SigV4 signing). AWS CLI v2 on the runner is a
-          # self-contained bundle that doesn't expose these to system python, so install them.
-          python3 -m pip install --quiet --disable-pip-version-check \
-            'openai>=1.66' 'aws-bedrock-token-generator>=1.0'
-          python3 /tmp/mantle_review.py
+          # Dependencies (openai SDK + aws-bedrock-token-generator) are declared inline in the
+          # script via PEP 723 metadata; `uv run` resolves them into an ephemeral, cached env
+          # and provisions Python as needed — no system pip install, no venv to manage. Job env
+          # vars and the OIDC-issued AWS credentials are inherited by the subprocess.
+          uv run /tmp/mantle_review.py
           echo "has_review=true" >> "$GITHUB_OUTPUT"
 
       - name: Update sticky comment with review
