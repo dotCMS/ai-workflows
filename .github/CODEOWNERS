@@ -2,3 +2,6 @@
 # Requires approval from core workflow developers or platform engineers for all changes
 
 * @dotCMS/core-workflow-developers @dotCMS/platform-engineers
+
+# .github changes can be reviewed by any dotCMS developer
+.github/ @dotCMS/dotdevelopers
