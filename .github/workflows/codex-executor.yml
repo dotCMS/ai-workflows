@@ -183,6 +183,12 @@ jobs:
           chmod +x /tmp/sticky-comment.sh
 
       - name: Set up mantle review helper (OpenAI SDK + short-term bearer)
+        # Inlined to /tmp on purpose (same reason as the sticky-comment helper above): this is
+        # a cross-repo REUSABLE workflow, so actions/checkout pulls the *consumer's* repo, and a
+        # relative local action/script reference (`./...`) resolves against the consumer, not
+        # ai-workflows. Shipping the script as a real file would require a fully-qualified
+        # composite action or a self-checkout of ai-workflows at a pinned ref — deliberately
+        # avoided here to keep this executor self-contained and version-locked. See PR #31.
         run: |
           cat > /tmp/mantle_review.py <<'PY_EOF'
           #!/usr/bin/env python3
