@@ -2,10 +2,17 @@
 # Codex Executor Workflow (Reusable)
 #
 # PURPOSE: Reviews PRs using OpenAI GPT/Codex models (GPT-5.5, GPT-5.4) served by the
-# AWS **bedrock-mantle** endpoint — the OpenAI Responses API at
-# https://bedrock-mantle.{region}.api.aws/v1. These models are NOT on bedrock-runtime:
-# there is no InvokeModel/Converse, so the generic Bedrock executor cannot reach them.
-# Maintains the same auto-updating sticky comment as the other executors.
+# AWS **bedrock-mantle** endpoint via the OpenAI Responses API. These models are NOT on
+# bedrock-runtime: there is no InvokeModel/Converse, so the generic Bedrock executor
+# cannot reach them. Maintains the same auto-updating sticky comment as the other executors.
+#
+# BASE PATH (critical): bedrock-mantle serves the two OpenAI families on DIFFERENT
+# OpenAI-compatible base paths on the same host. The frontier GPT-5.x / Codex models are
+# served under **/openai/v1** (per the AWS launch docs); the open-weight gpt-oss-* models
+# are served under **/v1**. They are mutually exclusive — verified live 2026-06-11:
+# gpt-5.5/5.4 reject /v1 ("model does not support the '/v1/responses' API") and gpt-oss-120b
+# rejects /openai/v1. So we pick the path from the model id (see mantle_review.py). Sending
+# every model to /v1 (the pre-fix behavior) is why GPT-5.5/5.4 appeared "unavailable" (#34).
 #
 # AUTH: OIDC -> assumed role -> a SHORT-TERM Bedrock bearer token minted from that session
 # (aws-bedrock-token-generator `provide_token()`), passed to the OpenAI SDK. The OpenAI SDK
@@ -20,11 +27,9 @@
 # the whole response and looks like a 60-100s hang. We stream the Responses API and accumulate
 # response.output_text.delta events. max_output_tokens does NOT cap reasoning tokens.
 #
-# REGION: the bedrock-mantle ENDPOINT exists in many regions including us-east-1, BUT the
-# GPT-5.5/5.4 MODELS are currently served only in us-east-2 — verified live via the Models
-# API (us-east-1 lists gpt-oss but no gpt-5*; us-east-2 lists openai.gpt-5.5 / openai.gpt-5.4).
-# So this executor remaps the us-east-1 default to us-east-2 where the models live. GPT-5.4 is
-# also offered in us-west-2. (Re-check the Models API if AWS expands GPT-5.x to us-east-1.)
+# REGION: the requested aws_region is used as-is. GPT-5.5/5.4 are served in us-east-1 and
+# us-east-2 (GPT-5.4 also us-west-2); gpt-oss is in all of them — so the orchestrator's
+# us-east-1 default works for every model. Verified live 2026-06-11.
 #
 # DATA RETENTION: the Responses API defaults store=true, which retains input+output for 30
 # days in-region for previous_response_id chaining. Code review is single-shot, so we send
@@ -51,7 +56,7 @@ on:
         required: true
         type: string
       aws_region:
-        description: 'AWS region for the mantle endpoint. The us-east-1 default is remapped to us-east-2, where GPT-5.5/5.4 are served (the endpoint exists in us-east-1 but the models do not yet).'
+        description: 'AWS region for the mantle endpoint, used as-is. GPT-5.5/5.4 are served in us-east-1 and us-east-2 (GPT-5.4 also us-west-2); gpt-oss in all.'
         required: false
         type: string
         default: 'us-east-1'
@@ -83,6 +88,11 @@ on:
         required: false
         type: string
         default: 'medium'
+      mantle_api_path:
+        description: 'Override the mantle OpenAI-compat base path. Empty (default) auto-selects: /openai/v1 for GPT-5.x/Codex, /v1 for gpt-oss-*. Set only if AWS changes the routing.'
+        required: false
+        type: string
+        default: ''
       timeout_minutes:
         description: 'Job timeout in minutes. Reasoning models stream slowly; default is generous.'
         required: false
@@ -110,23 +120,6 @@ jobs:
       # Default uses the model id so different models naturally get different stickies.
       STICKY_MARKER: ${{ format('<!-- dotcms-ai-review:v3:{0} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id) }}
     steps:
-      - name: Resolve mantle region
-        id: region
-        env:
-          REQUESTED_REGION: ${{ inputs.aws_region }}
-        run: |
-          set -euo pipefail
-          # The mantle endpoint exists in us-east-1, but GPT-5.5/5.4 are served only in
-          # us-east-2 (us-east-1 lists gpt-oss but no gpt-5*). Treat the us-east-1 default as
-          # "send to where the models live" so consumers only set model_id. An explicit
-          # us-west-2 (valid for GPT-5.4) is honored as-is.
-          REGION="${REQUESTED_REGION}"
-          if [ -z "${REGION}" ] || [ "${REGION}" = "us-east-1" ]; then
-            REGION="us-east-2"
-          fi
-          echo "Effective mantle region: ${REGION}"
-          echo "region=${REGION}" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -135,7 +128,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ inputs.bedrock_role_arn }}
-          aws-region: ${{ steps.region.outputs.region }}
+          aws-region: ${{ inputs.aws_region }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
@@ -220,7 +213,14 @@ jobs:
           # mantle region by configure-aws-credentials, so the token is signed for that region.
           token = provide_token()
 
-          client = OpenAI(base_url=f"https://bedrock-mantle.{region}.api.aws/v1", api_key=token)
+          # bedrock-mantle serves the two OpenAI families on different OpenAI-compatible base
+          # paths on the same host: frontier GPT-5.x / Codex live under /openai/v1 (per the AWS
+          # launch docs), open-weight gpt-oss-* under /v1. They reject each other's path, so
+          # pick by model id. Verified live 2026-06-11 (#34). MANTLE_API_PATH overrides if AWS
+          # ever unifies them. (Path includes the OpenAI-compat segment; host is mantle.)
+          api_path = os.environ.get("MANTLE_API_PATH") or ("/v1" if "gpt-oss" in model else "/openai/v1")
+          client = OpenAI(base_url=f"https://bedrock-mantle.{region}.api.aws{api_path}", api_key=token)
+          print(f"mantle base path: {api_path} (model: {model})", file=sys.stderr)
 
           text_parts, usage = [], None
           try:
@@ -348,7 +348,8 @@ jobs:
       - name: Invoke bedrock-mantle (OpenAI Responses API, streaming)
         id: invoke
         env:
-          MANTLE_REGION: ${{ steps.region.outputs.region }}
+          MANTLE_REGION: ${{ inputs.aws_region }}
+          MANTLE_API_PATH: ${{ inputs.mantle_api_path }}
         run: |
           set -euo pipefail
           # Dependencies (openai SDK + aws-bedrock-token-generator) are declared inline in the
