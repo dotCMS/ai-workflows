@@ -15,6 +15,7 @@ The repository implements a reusable workflow architecture with model-aware rout
 - **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): Lightweight wrapper that handles @claude mention detection AND routes to the appropriate executor based on `model_id`. Consumer repositories call this with `trigger_mode: interactive` or `trigger_mode: automatic`. Exactly one executor runs per call.
 - **Claude Executor** (`.github/workflows/claude-executor.yml`): Execution engine for Anthropic models — runs `anthropics/claude-code-action@v1` either against the direct Anthropic API (`provider: anthropic-api`, default) or via AWS Bedrock (`provider: anthropic-bedrock`, OIDC + `use_bedrock=true`).
 - **Bedrock Generic Executor** (`.github/workflows/bedrock-generic-executor.yml`): Execution engine for **any non-Anthropic Bedrock model** (Amazon Nova, Meta Llama, Mistral, Cohere, AI21). Uses the Bedrock Converse API and maintains its own sticky comment via an inlined helper (set up to `/tmp` at job start, so no cross-repo path dependency).
+- **Codex Executor** (`.github/workflows/codex-executor.yml`): Execution engine for **OpenAI GPT/Codex models** (`openai.gpt-5.5`, `openai.gpt-5.4`). These are served only by the separate **bedrock-mantle** endpoint (OpenAI Responses API), not bedrock-runtime — so it calls mantle with the **OpenAI SDK** authenticated by a **short-term Bedrock bearer token** minted in-process from the OIDC-assumed-role session (`aws-bedrock-token-generator`), and streams `response.output_text.delta` events. The token is OIDC-derived (no long-lived secret, nothing to clean up, ≤1h via the role session) and never written to env/disk/logs; IAM grants `bedrock-mantle:CallWithBearerToken` scoped to `BearerTokenType=SHORT_TERM`. Streaming is mandatory (GPT-5.x reasons before emitting). Remaps the `us-east-1` default to `us-east-2`, where GPT-5.5/5.4 are served (the mantle endpoint exists in us-east-1 but the models are not there yet — verified via the Models API). Sends `store: false` for zero data retention. Reuses the same `/tmp` sticky-comment helper. See dotCMS/Infrastructure-as-code#7836.
 - **Deployment Guard** (`.github/workflows/deployment-guard.yml`): Reusable workflow for validating deployment changes with configurable rules. Features organization-based bypass for trusted members, file allowlist validation, image-only change detection, and comprehensive image validation (format, repository, version pattern, registry existence, anti-downgrade logic).
 
 ### Multi-model Routing (v3)
@@ -26,9 +27,10 @@ The orchestrator picks the executor by inspecting `model_id`:
 | _(empty / unset)_                                 | `claude-executor` (`anthropic-api`)| Backward-compat default; requires `ANTHROPIC_API_KEY` secret |
 | `*.anthropic.*` (e.g. `global.anthropic.claude-sonnet-4-6`) | `claude-executor` (`anthropic-bedrock`) | Requires `bedrock_role_arn` input              |
 | `anthropic.*` (bare)                              | `claude-executor` (`anthropic-bedrock`) | Requires `bedrock_role_arn` input              |
+| `openai.*` (e.g. `openai.gpt-5.5`, `openai.gpt-5.4`) | `codex-executor`                  | Requires `bedrock_role_arn`; mantle path (us-east-2) |
 | Anything else (Nova, Llama, Mistral, …)           | `bedrock-generic-executor`          | Requires `bedrock_role_arn` input              |
 
-The match for the Anthropic family is anchored: `^([a-z]+\.)?anthropic\.` — so a model ID that merely contains the substring `anthropic.` (e.g. `us.not-anthropic.foo`) is **not** misrouted.
+The matches for the Anthropic and OpenAI families are anchored: `^([a-z]+\.)?anthropic\.` and `^([a-z]+\.)?openai\.` — so a model ID that merely contains the substring `anthropic.`/`openai.` (e.g. `us.not-anthropic.foo`) is **not** misrouted. `openai.*` is checked before the generic fallback.
 
 ### Sticky Comments
 

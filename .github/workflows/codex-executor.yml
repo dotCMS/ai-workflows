@@ -1,0 +1,393 @@
+---
+# Codex Executor Workflow (Reusable)
+#
+# PURPOSE: Reviews PRs using OpenAI GPT/Codex models (GPT-5.5, GPT-5.4) served by the
+# AWS **bedrock-mantle** endpoint — the OpenAI Responses API at
+# https://bedrock-mantle.{region}.api.aws/v1. These models are NOT on bedrock-runtime:
+# there is no InvokeModel/Converse, so the generic Bedrock executor cannot reach them.
+# Maintains the same auto-updating sticky comment as the other executors.
+#
+# AUTH: OIDC -> assumed role -> a SHORT-TERM Bedrock bearer token minted from that session
+# (aws-bedrock-token-generator `provide_token()`), passed to the OpenAI SDK. The OpenAI SDK
+# requires a bearer token (it cannot consume SigV4 directly), but a short-term key keeps the
+# OIDC-only posture: it is derived from the current STS credentials with NO long-lived secret,
+# NO stored resource to clean up, and a lifetime of min(12h, role session). Our role's
+# max_session_duration is 1h, so each token dies within the hour and lives only in this
+# ephemeral runner's memory. We never export it to GITHUB_ENV / disk / logs. IAM requires
+# bedrock-mantle:CallWithBearerToken (scoped to BearerTokenType=SHORT_TERM). See #7836.
+#
+# STREAMING IS MANDATORY: GPT-5.5 reasons before emitting output; a non-streaming call buffers
+# the whole response and looks like a 60-100s hang. We stream the Responses API and accumulate
+# response.output_text.delta events. max_output_tokens does NOT cap reasoning tokens.
+#
+# REGION: the bedrock-mantle ENDPOINT exists in many regions including us-east-1, BUT the
+# GPT-5.5/5.4 MODELS are currently served only in us-east-2 — verified live via the Models
+# API (us-east-1 lists gpt-oss but no gpt-5*; us-east-2 lists openai.gpt-5.5 / openai.gpt-5.4).
+# So this executor remaps the us-east-1 default to us-east-2 where the models live. GPT-5.4 is
+# also offered in us-west-2. (Re-check the Models API if AWS expands GPT-5.x to us-east-1.)
+#
+# DATA RETENTION: the Responses API defaults store=true, which retains input+output for 30
+# days in-region for previous_response_id chaining. Code review is single-shot, so we send
+# store=false for zero data retention.
+#
+# ROUTING: claude-orchestrator.yml selects this executor automatically when model_id matches
+# openai.* — consumers shouldn't usually call it directly.
+#
+# REQUIREMENTS: The caller's repo must have id-token: write permission and a mantle-capable
+# IAM role accessible via OIDC (bedrock-mantle:CreateInference with a bedrock-mantle:Model
+# StringLike openai.* condition). See dotCMS/Infrastructure-as-code bedrock-code-review/.
+
+name: Codex Executor (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      model_id:
+        description: 'OpenAI mantle model ID (e.g. openai.gpt-5.5, openai.gpt-5.4)'
+        required: true
+        type: string
+      bedrock_role_arn:
+        description: 'IAM role ARN that GitHub Actions assumes via OIDC to call bedrock-mantle'
+        required: true
+        type: string
+      aws_region:
+        description: 'AWS region for the mantle endpoint. The us-east-1 default is remapped to us-east-2, where GPT-5.5/5.4 are served (the endpoint exists in us-east-1 but the models do not yet).'
+        required: false
+        type: string
+        default: 'us-east-1'
+      prompt:
+        description: 'Review prompt sent to the model along with the PR diff'
+        required: false
+        type: string
+        default: |
+          Review this PR diff. Flag anything that looks wrong, risky, or worth a second look:
+          bad assumptions, missing edge cases, design problems, security issues. Skip praise.
+          If it is clean, say so in one line.
+      sticky_namespace:
+        description: 'Namespace appended to the sticky-comment marker to keep multiple review jobs from clobbering each other (e.g. "codex-reviewer"). Defaults to the model id.'
+        required: false
+        type: string
+        default: ''
+      max_diff_chars:
+        description: 'Maximum diff length to send to the model (chars). Larger diffs are truncated at a line boundary.'
+        required: false
+        type: number
+        default: 80000
+      max_output_tokens:
+        description: 'Maximum tokens the model may emit for the visible answer. Does NOT cap reasoning tokens (cost/latency note).'
+        required: false
+        type: number
+        default: 2048
+      reasoning_effort:
+        description: 'Reasoning effort for GPT-5.x: minimal | low | medium | high. Higher = better review, more reasoning tokens + latency.'
+        required: false
+        type: string
+        default: 'medium'
+      timeout_minutes:
+        description: 'Job timeout in minutes. Reasoning models stream slowly; default is generous.'
+        required: false
+        type: number
+        default: 20
+      runner:
+        description: 'GitHub runner label'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+
+jobs:
+  review:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      id-token: write       # OIDC -> STS
+      contents: read
+      pull-requests: write  # post / update sticky comment
+    env:
+      MODEL_ID: ${{ inputs.model_id }}
+      MAX_DIFF_CHARS: ${{ inputs.max_diff_chars }}
+      MAX_OUTPUT_TOKENS: ${{ inputs.max_output_tokens }}
+      REASONING_EFFORT: ${{ inputs.reasoning_effort }}
+      # Default uses the model id so different models naturally get different stickies.
+      STICKY_MARKER: ${{ format('<!-- dotcms-ai-review:v3:{0} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id) }}
+    steps:
+      - name: Resolve mantle region
+        id: region
+        env:
+          REQUESTED_REGION: ${{ inputs.aws_region }}
+        run: |
+          set -euo pipefail
+          # The mantle endpoint exists in us-east-1, but GPT-5.5/5.4 are served only in
+          # us-east-2 (us-east-1 lists gpt-oss but no gpt-5*). Treat the us-east-1 default as
+          # "send to where the models live" so consumers only set model_id. An explicit
+          # us-west-2 (valid for GPT-5.4) is honored as-is.
+          REGION="${REQUESTED_REGION}"
+          if [ -z "${REGION}" ] || [ "${REGION}" = "us-east-1" ]; then
+            REGION="us-east-2"
+          fi
+          echo "Effective mantle region: ${REGION}"
+          echo "region=${REGION}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.bedrock_role_arn }}
+          aws-region: ${{ steps.region.outputs.region }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # Inlined because actions/checkout above checks out the *consumer's* repo, not this one,
+      # so a relative script path would resolve against the consumer (and not exist for
+      # external consumers). Writing to /tmp avoids the cross-repo path dependency.
+      - name: Set up sticky-comment helper
+        run: |
+          cat > /tmp/sticky-comment.sh <<'STICKY_EOF'
+          #!/usr/bin/env bash
+          # Find-or-update a single PR comment identified by STICKY_MARKER.
+          # Usage: sticky-comment.sh <pr_number> <body_file>
+          # Env:   GH_TOKEN, GITHUB_REPOSITORY, STICKY_MARKER
+          set -euo pipefail
+          PR_NUMBER="${1:?pr number required}"
+          BODY_FILE="${2:?body file required}"
+          : "${GH_TOKEN:?GH_TOKEN must be set}"
+          : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
+          : "${STICKY_MARKER:?STICKY_MARKER must be set}"
+          [ -r "$BODY_FILE" ] || { echo "Body file not readable: $BODY_FILE" >&2; exit 1; }
+          EXISTING_ID=$(
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+              | jq -r --arg marker "$STICKY_MARKER" \
+                  '.[] | select(.body | startswith($marker)) | .id' \
+              | head -1
+          )
+          if [ -n "$EXISTING_ID" ] && ! [[ "$EXISTING_ID" =~ ^[0-9]+$ ]]; then
+            echo "::warning::EXISTING_ID is non-numeric ($EXISTING_ID); creating a new comment instead"
+            EXISTING_ID=""
+          fi
+          PAYLOAD=$(jq -Rs --arg key body '{($key): .}' < "$BODY_FILE")
+          if [ -n "$EXISTING_ID" ]; then
+            echo "Updating existing sticky comment $EXISTING_ID"
+            echo "$PAYLOAD" | gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_ID}" \
+              -X PATCH --input -
+          else
+            echo "Creating new sticky comment on PR #${PR_NUMBER}"
+            echo "$PAYLOAD" | gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -X POST --input -
+          fi
+          STICKY_EOF
+          chmod +x /tmp/sticky-comment.sh
+
+      - name: Set up mantle review helper (OpenAI SDK + short-term bearer)
+        # Inlined to /tmp on purpose (same reason as the sticky-comment helper above): this is
+        # a cross-repo REUSABLE workflow, so actions/checkout pulls the *consumer's* repo, and a
+        # relative local action/script reference (`./...`) resolves against the consumer, not
+        # ai-workflows. Shipping the script as a real file would require a fully-qualified
+        # composite action or a self-checkout of ai-workflows at a pinned ref — deliberately
+        # avoided here to keep this executor self-contained and version-locked. See PR #31.
+        run: |
+          cat > /tmp/mantle_review.py <<'PY_EOF'
+          #!/usr/bin/env python3
+          # /// script
+          # requires-python = ">=3.9"
+          # dependencies = ["openai>=1.66", "aws-bedrock-token-generator>=1.0"]
+          # ///
+          # Review a PR diff via the OpenAI Responses API on bedrock-mantle, using the OpenAI
+          # SDK with a SHORT-TERM Bedrock bearer token minted from the assumed-role session.
+          # Dependencies are declared above as PEP 723 inline metadata; `uv run` provisions
+          # them (and Python) into an ephemeral, cached environment — no system pip install.
+          import os, sys
+          from aws_bedrock_token_generator import provide_token
+          from openai import OpenAI
+
+          region = os.environ["MANTLE_REGION"]
+          model = os.environ["MODEL_ID"]
+          max_out = int(os.environ.get("MAX_OUTPUT_TOKENS") or "2048")
+          effort = os.environ.get("REASONING_EFFORT") or "medium"
+
+          with open("/tmp/prompt.txt", encoding="utf-8") as f:
+              user_input = f.read()
+
+          # Mint a short-term bearer token from the current STS (OIDC-assumed-role) credentials.
+          # provide_token() is a local signing operation (no API call, no stored resource); the
+          # token inherits the role's permissions, lives only in this process, and expires with
+          # the role session (max_session_duration=1h here; <=12h cap). It is NEVER written to
+          # GITHUB_ENV, disk, or logs — keep it a local variable. AWS_REGION is set to the
+          # mantle region by configure-aws-credentials, so the token is signed for that region.
+          token = provide_token()
+
+          client = OpenAI(base_url=f"https://bedrock-mantle.{region}.api.aws/v1", api_key=token)
+
+          text_parts, usage = [], None
+          try:
+              # store=False → zero data retention. The Responses API otherwise defaults store=True
+              # (retains input+output 30 days in-region for previous_response_id chaining); review
+              # is single-shot, so we don't need state and don't want the diff retained.
+              stream = client.responses.create(
+                  model=model,
+                  instructions="You are a senior code reviewer. Output GitHub-flavored markdown. Be concise.",
+                  input=user_input,
+                  max_output_tokens=max_out,
+                  reasoning={"effort": effort},
+                  store=False,
+                  stream=True,
+              )
+              for event in stream:
+                  etype = getattr(event, "type", "")
+                  if etype == "response.output_text.delta":
+                      text_parts.append(event.delta)
+                  elif etype == "response.completed":
+                      usage = getattr(event.response, "usage", None)
+                  elif etype in ("response.failed", "error"):
+                      print(f"::error::mantle stream error: {etype}", file=sys.stderr)
+          except Exception as e:  # noqa: BLE001 — surface any SDK/transport error into the job log
+              print(f"::error::mantle request failed: {type(e).__name__}: {str(e)[:500]}", file=sys.stderr)
+              sys.exit(1)
+
+          review = "".join(text_parts).strip()
+          with open("/tmp/review.md", "w", encoding="utf-8") as f:
+              f.write(review if review else "_(model returned no text)_\n")
+
+          # Responses API usage: input_tokens, output_tokens, total_tokens, plus
+          # output_tokens_details.reasoning_tokens for the (uncapped) reasoning spend.
+          def _g(obj, name, default="?"):
+              return getattr(obj, name, default) if obj is not None else default
+          it = _g(usage, "input_tokens")
+          ot = _g(usage, "output_tokens")
+          tt = _g(usage, "total_tokens")
+          rt = _g(_g(usage, "output_tokens_details", None), "reasoning_tokens")
+          with open("/tmp/usage.txt", "w", encoding="utf-8") as f:
+              f.write(f"in: {it} · out: {ot} (reasoning: {rt}) · total: {tt}")
+          print("Tokens:", open("/tmp/usage.txt", encoding="utf-8").read())
+
+          if not review:
+              sys.exit(1)
+          PY_EOF
+          chmod +x /tmp/mantle_review.py
+
+      - name: Resolve PR number
+        id: pr
+        env:
+          ISSUE_PR_URL: ${{ github.event.issue.pull_request.url }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request|pull_request_target|pull_request_review|pull_request_review_comment)
+              PR_NUM="${{ github.event.pull_request.number }}"
+              ;;
+            issue_comment)
+              if [ -n "${ISSUE_PR_URL}" ]; then
+                PR_NUM="${{ github.event.issue.number }}"
+              else
+                echo "::error::codex-executor needs a PR context; issue_comment fired on a non-PR issue"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::codex-executor doesn't support event type: ${GITHUB_EVENT_NAME}"
+              exit 1
+              ;;
+          esac
+          if ! [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Resolved PR number is not a positive integer: ${PR_NUM}"
+            exit 1
+          fi
+          echo "number=${PR_NUM}" >> "$GITHUB_OUTPUT"
+
+      - name: Post in-progress sticky comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            printf "%s\n\n" "${STICKY_MARKER}"
+            printf "🔄 **Codex review in progress** — model: \`%s\`\n\n" "${MODEL_ID}"
+            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+          } > /tmp/comment.md
+          /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
+
+      - name: Gather PR diff
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh pr diff "${PR_NUMBER}" > /tmp/pr.diff
+          ORIG=$(wc -c < /tmp/pr.diff)
+          if [ "${ORIG}" -gt "${MAX_DIFF_CHARS}" ]; then
+            head -c "${MAX_DIFF_CHARS}" /tmp/pr.diff | sed '$d' > /tmp/pr.diff.trimmed
+            printf "\n\n[TRUNCATED — diff was %s chars, kept first ~%s]\n" "${ORIG}" "${MAX_DIFF_CHARS}" >> /tmp/pr.diff.trimmed
+            mv /tmp/pr.diff.trimmed /tmp/pr.diff
+          fi
+          echo "diff_chars=$(wc -c < /tmp/pr.diff)" >> "$GITHUB_OUTPUT"
+
+      - name: Build prompt
+        env:
+          REVIEW_PROMPT: ${{ inputs.prompt }}
+        run: |
+          set -euo pipefail
+          # workflow_call always passes the caller's value, even when empty, so the input
+          # default above is never reached from the orchestrator. Fall back here.
+          if [ -z "${REVIEW_PROMPT}" ]; then
+            REVIEW_PROMPT="Review this PR diff. Flag anything that looks wrong, risky, or worth a second look: bad assumptions, missing edge cases, design problems, security issues. Skip praise. If it is clean, say so in one line."
+          fi
+          {
+            printf "%s\n\n" "${REVIEW_PROMPT}"
+            printf -- "--- BEGIN DIFF ---\n"
+            cat /tmp/pr.diff
+            printf -- "\n--- END DIFF ---\n"
+          } > /tmp/prompt.txt
+
+      - name: Invoke bedrock-mantle (OpenAI Responses API, streaming)
+        id: invoke
+        env:
+          MANTLE_REGION: ${{ steps.region.outputs.region }}
+        run: |
+          set -euo pipefail
+          # Dependencies (openai SDK + aws-bedrock-token-generator) are declared inline in the
+          # script via PEP 723 metadata; `uv run` resolves them into an ephemeral, cached env
+          # and provisions Python as needed — no system pip install, no venv to manage. Job env
+          # vars and the OIDC-issued AWS credentials are inherited by the subprocess.
+          uv run /tmp/mantle_review.py
+          echo "has_review=true" >> "$GITHUB_OUTPUT"
+
+      - name: Update sticky comment with review
+        if: steps.invoke.outputs.has_review == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          USAGE=$(cat /tmp/usage.txt)
+          RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            printf "%s\n\n" "${STICKY_MARKER}"
+            printf "## 🤖 Codex Review — \`%s\`\n\n" "${MODEL_ID}"
+            cat /tmp/review.md
+            printf "\n\n---\n"
+            printf "<sub>Run: [#%s](%s) · tokens: %s</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}" "${USAGE}"
+          } > /tmp/comment.md
+          /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
+
+      - name: Report failure into sticky comment
+        if: failure() && steps.invoke.outputs.has_review != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            printf "%s\n\n" "${STICKY_MARKER}"
+            printf "## ❌ Codex Review failed — \`%s\`\n\n" "${MODEL_ID}"
+            printf "The review job failed before producing output. See the run for details.\n\n"
+            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+          } > /tmp/comment.md
+          /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
