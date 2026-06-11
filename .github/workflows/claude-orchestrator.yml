@@ -82,6 +82,11 @@ on:
         required: false
         type: string
         default: ''
+      allowed_bots:
+        description: 'Comma-separated bot usernames allowed to trigger the action, or "*" for all bots. Defaults to "claude" so the Claude Code GitHub App can trigger reviews; pass "" to block all bots. Applies to the Anthropic path only.'
+        required: false
+        type: string
+        default: 'claude'
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key — required only when using the direct Anthropic API path (model_id empty)'
@@ -186,6 +191,7 @@ jobs:
       model_id: ${{ inputs.model_id }}
       bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
       aws_region: ${{ inputs.aws_region }}
+      allowed_bots: ${{ inputs.allowed_bots }}
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 

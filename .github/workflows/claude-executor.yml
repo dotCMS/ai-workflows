@@ -67,6 +67,11 @@ on:
         required: false
         type: string
         default: 'us-east-1'
+      allowed_bots:
+        description: 'Comma-separated bot usernames allowed to trigger the action, or "*" for all bots. Defaults to "claude" so the Claude Code GitHub App can trigger reviews; pass "" to block all bots.'
+        required: false
+        type: string
+        default: 'claude'
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key — required when provider=anthropic-api, ignored otherwise'
@@ -185,6 +190,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ steps.args.outputs.composed }}
+          allowed_bots: ${{ inputs.allowed_bots }}
           use_sticky_comment: "true"
           track_progress: "true"
 
@@ -197,6 +203,7 @@ jobs:
           use_bedrock: "true"
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ steps.args.outputs.composed }}
+          allowed_bots: ${{ inputs.allowed_bots }}
           use_sticky_comment: "true"
           track_progress: "true"
         env:

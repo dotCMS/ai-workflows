@@ -248,6 +248,7 @@ Sophisticated version comparison supporting dotCMS format: `YY.MM.DD[-REBUILD][_
 - **Default Tools**: `git status` and `git diff`
 - **Mention Detection**: Case-insensitive @claude in comments, reviews, issues, and PRs
 - **Concurrency**: Consumer repositories should implement concurrency control to prevent duplicate runs
+- **Allowed Bots**: `allowed_bots` defaults to `claude`, so the Claude Code GitHub App can trigger reviews on PRs/pushes it initiates. `claude-code-action` otherwise blocks bot-initiated runs. Pass `allowed_bots: ""` to block all bots, or `"*"` to allow any (e.g. dependabot, renovate). Applies to the Anthropic path only.
 
 ### Deployment Guard
 - **Organization bypass**: Disabled by default (must configure `trusted_organization`)
