@@ -27,10 +27,9 @@
 # the whole response and looks like a 60-100s hang. We stream the Responses API and accumulate
 # response.output_text.delta events. max_output_tokens does NOT cap reasoning tokens.
 #
-# REGION: GPT-5.5/5.4 are now served in us-east-1 AND us-east-2 (verified live 2026-06-11 —
-# at #31's authoring they were us-east-2-only, hence the original remap). GPT-5.4 is also in
-# us-west-2. We honor whatever region the caller passes and only fall back to us-east-2 when
-# the region is empty, so the orchestrator's us-east-1 default now runs in us-east-1.
+# REGION: the requested aws_region is used as-is. GPT-5.5/5.4 are served in us-east-1 and
+# us-east-2 (GPT-5.4 also us-west-2); gpt-oss is in all of them — so the orchestrator's
+# us-east-1 default works for every model. Verified live 2026-06-11.
 #
 # DATA RETENTION: the Responses API defaults store=true, which retains input+output for 30
 # days in-region for previous_response_id chaining. Code review is single-shot, so we send
@@ -57,7 +56,7 @@ on:
         required: true
         type: string
       aws_region:
-        description: 'AWS region for the mantle endpoint. Honored as-is; GPT-5.5/5.4 are served in us-east-1 and us-east-2 (GPT-5.4 also us-west-2). An empty value falls back to us-east-2.'
+        description: 'AWS region for the mantle endpoint, used as-is. GPT-5.5/5.4 are served in us-east-1 and us-east-2 (GPT-5.4 also us-west-2); gpt-oss in all.'
         required: false
         type: string
         default: 'us-east-1'
@@ -121,23 +120,6 @@ jobs:
       # Default uses the model id so different models naturally get different stickies.
       STICKY_MARKER: ${{ format('<!-- dotcms-ai-review:v3:{0} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id) }}
     steps:
-      - name: Resolve mantle region
-        id: region
-        env:
-          REQUESTED_REGION: ${{ inputs.aws_region }}
-        run: |
-          set -euo pipefail
-          # GPT-5.5/5.4 are served in us-east-1 and us-east-2 (and GPT-5.4 in us-west-2), so we
-          # honor the requested region as-is and only fall back to us-east-2 when it is empty.
-          # (At #31's authoring GPT-5.x were us-east-2-only, so the default was remapped there;
-          # that's no longer necessary — verified live 2026-06-11.)
-          REGION="${REQUESTED_REGION}"
-          if [ -z "${REGION}" ]; then
-            REGION="us-east-2"
-          fi
-          echo "Effective mantle region: ${REGION}"
-          echo "region=${REGION}" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -146,7 +128,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ inputs.bedrock_role_arn }}
-          aws-region: ${{ steps.region.outputs.region }}
+          aws-region: ${{ inputs.aws_region }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
@@ -366,7 +348,7 @@ jobs:
       - name: Invoke bedrock-mantle (OpenAI Responses API, streaming)
         id: invoke
         env:
-          MANTLE_REGION: ${{ steps.region.outputs.region }}
+          MANTLE_REGION: ${{ inputs.aws_region }}
           MANTLE_API_PATH: ${{ inputs.mantle_api_path }}
         run: |
           set -euo pipefail
