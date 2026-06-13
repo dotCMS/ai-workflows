@@ -25,7 +25,15 @@
 #
 # STREAMING IS MANDATORY: GPT-5.5 reasons before emitting output; a non-streaming call buffers
 # the whole response and looks like a 60-100s hang. We stream the Responses API and accumulate
-# response.output_text.delta events. max_output_tokens does NOT cap reasoning tokens.
+# response.output_text.delta events.
+#
+# OUTPUT-TOKEN BUDGET (max_output_tokens): on the Responses API this caps the COMBINED reasoning
+# + visible-answer tokens, NOT just the answer. If a reasoning model spends the whole budget
+# thinking, the stream ends with status=incomplete (incomplete_details.reason=max_output_tokens)
+# and ZERO output_text.delta events — i.e. an empty review with no error. We therefore: (1)
+# default the budget high enough for medium-effort reasoning (8000), (2) capture usage/status
+# from the incomplete terminal event too, and (3) retry once with a larger budget + lighter
+# reasoning when the first attempt comes back empty-because-truncated. See mantle_review.py.
 #
 # REGION: the requested aws_region is used as-is. GPT-5.5/5.4 are served in us-east-1 and
 # us-east-2 (GPT-5.4 also us-west-2); gpt-oss is in all of them — so the orchestrator's
@@ -87,10 +95,10 @@ on:
         type: number
         default: 80000
       max_output_tokens:
-        description: 'Maximum tokens the model may emit for the visible answer. Does NOT cap reasoning tokens (cost/latency note).'
+        description: 'Total output-token budget for the Responses API call — covers BOTH reasoning tokens AND the visible answer. Reasoning models spend this on thinking first, so it must be large enough that the answer still fits after reasoning, or the response comes back status=incomplete with no visible text. Default 8000 gives medium-effort GPT-5.x comfortable headroom.'
         required: false
         type: number
-        default: 2048
+        default: 8000
       reasoning_effort:
         description: 'Reasoning effort for GPT-5.x: minimal | low | medium | high. Higher = better review, more reasoning tokens + latency.'
         required: false
@@ -256,8 +264,14 @@ jobs:
           client = OpenAI(base_url=f"https://bedrock-mantle.{region}.api.aws{api_path}", api_key=token)
           print(f"mantle base path: {api_path} (model: {model})", file=sys.stderr)
 
-          text_parts, usage = [], None
-          try:
+          # One streaming Responses-API call. Returns (visible_text, final_response) where
+          # final_response is the response object from whichever TERMINAL event arrived —
+          # completed, incomplete, or failed. Keying only on response.completed (the pre-fix
+          # behavior) silently lost the incomplete case: a reasoning model that spends its whole
+          # max_output_tokens budget thinking ends with status=incomplete and NO
+          # output_text.delta, yielding an empty review with no error.
+          def stream_review(out_budget, eff):
+              parts, final = [], None
               # store=False → zero data retention. The Responses API otherwise defaults store=True
               # (retains input+output 30 days in-region for previous_response_id chaining); review
               # is single-shot, so we don't need state and don't want the diff retained.
@@ -265,29 +279,68 @@ jobs:
                   model=model,
                   instructions=instructions,
                   input=user_input,
-                  max_output_tokens=max_out,
-                  reasoning={"effort": effort},
+                  max_output_tokens=out_budget,
+                  reasoning={"effort": eff},
                   store=False,
                   stream=True,
               )
               for event in stream:
                   etype = getattr(event, "type", "")
                   if etype == "response.output_text.delta":
-                      text_parts.append(event.delta)
-                  elif etype == "response.completed":
-                      usage = getattr(event.response, "usage", None)
-                  elif etype in ("response.failed", "error"):
-                      print(f"::error::mantle stream error: {etype}", file=sys.stderr)
+                      parts.append(event.delta)
+                  elif etype in ("response.completed", "response.incomplete", "response.failed"):
+                      final = getattr(event, "response", None)
+                      if etype != "response.completed":
+                          print(f"::warning::mantle stream ended: {etype}", file=sys.stderr)
+                  elif etype == "error":
+                      print("::error::mantle stream error event", file=sys.stderr)
+              return "".join(parts).strip(), final
+
+          def _status(resp):
+              return getattr(resp, "status", None) if resp is not None else None
+
+          def _reason(resp):
+              det = getattr(resp, "incomplete_details", None) if resp is not None else None
+              return getattr(det, "reason", None) if det is not None else None
+
+          try:
+              review, resp = stream_review(max_out, effort)
+              # Empty answer because reasoning consumed the whole output budget → retry once with
+              # more room and lighter reasoning so the visible answer actually fits. A degraded
+              # review beats the generic "review failed" sticky this case used to produce.
+              if not review and _status(resp) == "incomplete" and _reason(resp) == "max_output_tokens":
+                  retry_out = max(max_out * 2, 16000)
+                  retry_eff = "low" if effort in ("medium", "high") else effort
+                  print(f"::warning::response incomplete (reasoning hit max_output_tokens={max_out}); "
+                        f"retrying with max_output_tokens={retry_out}, reasoning_effort={retry_eff}",
+                        file=sys.stderr)
+                  review, resp = stream_review(retry_out, retry_eff)
           except Exception as e:  # noqa: BLE001 — surface any SDK/transport error into the job log
               print(f"::error::mantle request failed: {type(e).__name__}: {str(e)[:500]}", file=sys.stderr)
               sys.exit(1)
 
-          review = "".join(text_parts).strip()
+          usage = getattr(resp, "usage", None)
+          status = _status(resp)
+          reason = _reason(resp)
+
+          # If the answer came back but was cut off mid-stream by the token cap, keep it and flag it.
+          trunc_note = ""
+          if review and status == "incomplete":
+              trunc_note = (f"\n\n> ⚠️ _Review truncated — the model hit its output-token budget "
+                            f"(`{reason}`); findings above may be incomplete._\n")
+
           with open("/tmp/review.md", "w", encoding="utf-8") as f:
-              f.write(review if review else "_(model returned no text)_\n")
+              if review:
+                  f.write(review + trunc_note)
+              elif status == "incomplete":
+                  f.write(f"⚠️ _Codex could not produce a review: the model exhausted its "
+                          f"output-token budget while reasoning (`{reason}`), even after a retry. "
+                          f"Raise `max_output_tokens` or lower `reasoning_effort`._\n")
+              else:
+                  f.write("_(model returned no text)_\n")
 
           # Responses API usage: input_tokens, output_tokens, total_tokens, plus
-          # output_tokens_details.reasoning_tokens for the (uncapped) reasoning spend.
+          # output_tokens_details.reasoning_tokens — the reasoning slice of the output budget.
           def _g(obj, name, default="?"):
               return getattr(obj, name, default) if obj is not None else default
           it = _g(usage, "input_tokens")
@@ -298,7 +351,10 @@ jobs:
               f.write(f"in: {it} · out: {ot} (reasoning: {rt}) · total: {tt}")
           print("Tokens:", open("/tmp/usage.txt", encoding="utf-8").read())
 
-          if not review:
+          # Hard-fail only when there is genuinely nothing to show AND no diagnosable reason — an
+          # incomplete/truncated response writes an explanatory message above and exits 0 so the
+          # sticky carries the diagnosis instead of a generic "review failed".
+          if not review and status != "incomplete":
               sys.exit(1)
           PY_EOF
           chmod +x /tmp/mantle_review.py
