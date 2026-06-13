@@ -339,6 +339,24 @@ jobs:
               else:
                   f.write("_(model returned no text)_\n")
 
+          # Outcome flag consumed by the workflow to pick the comment HEADER and the job exit
+          # code, so the human-facing status is visible in the sticky header AND in PR checks:
+          #   ok               full review                       -> 🤖 header, job green
+          #   truncated        partial review, hit token cap     -> ⚠️ header, job green
+          #   incomplete-empty no visible text even after retry  -> ❌ header, job RED
+          #   error            empty for an undiagnosed reason    -> generic failure path (exit 1)
+          if review and status == "incomplete":
+              outcome = "truncated"
+          elif review:
+              outcome = "ok"
+          elif status == "incomplete":
+              outcome = "incomplete-empty"
+          else:
+              outcome = "error"
+          with open("/tmp/outcome.txt", "w", encoding="utf-8") as f:
+              f.write(outcome)
+          print(f"outcome: {outcome}", file=sys.stderr)
+
           # Responses API usage: input_tokens, output_tokens, total_tokens, plus
           # output_tokens_details.reasoning_tokens — the reasoning slice of the output budget.
           def _g(obj, name, default="?"):
@@ -449,24 +467,44 @@ jobs:
           # vars and the OIDC-issued AWS credentials are inherited by the subprocess.
           uv run /tmp/mantle_review.py
           echo "has_review=true" >> "$GITHUB_OUTPUT"
+          # Surface the outcome (ok | truncated | incomplete-empty) so later steps can pick the
+          # comment header and decide whether to fail the job. Only reached when the script exits
+          # 0; a hard error exits 1 before this and is handled by the failure path below.
+          echo "outcome=$(cat /tmp/outcome.txt 2>/dev/null || echo ok)" >> "$GITHUB_OUTPUT"
 
       - name: Update sticky comment with review
         if: steps.invoke.outputs.has_review == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          OUTCOME: ${{ steps.invoke.outputs.outcome }}
         run: |
           set -euo pipefail
           USAGE=$(cat /tmp/usage.txt)
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          # Put the outcome in the HEADER so a human sees the status without reading the body.
+          case "${OUTCOME:-ok}" in
+            truncated)        HEADER="## ⚠️ Codex Review — truncated (partial; hit output-token budget)" ;;
+            incomplete-empty) HEADER="## ❌ Codex Review — no output (reasoning exhausted the token budget)" ;;
+            *)                HEADER="## 🤖 Codex Review" ;;
+          esac
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "## 🤖 Codex Review — \`%s\`\n\n" "${MODEL_ID}"
+            printf "%s — \`%s\`\n\n" "${HEADER}" "${MODEL_ID}"
             cat /tmp/review.md
             printf "\n\n---\n"
             printf "<sub>Run: [#%s](%s) · tokens: %s</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}" "${USAGE}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
+
+      - name: Fail job when no review was produced
+        # Top-level signal: after the diagnostic comment is posted above, fail the job so the
+        # "no output" outcome shows as a red ✗ in the PR's checks, not just a buried comment.
+        # (The review is advisory / non-blocking, so this surfaces it without gating merges.)
+        if: steps.invoke.outputs.outcome == 'incomplete-empty'
+        run: |
+          echo "::error::Codex produced no review — the model exhausted its output-token budget while reasoning, even after a retry. Failing the job so the outcome is visible in checks. Raise max_output_tokens or lower reasoning_effort."
+          exit 1
 
       - name: Report failure into sticky comment
         if: failure() && steps.invoke.outputs.has_review != 'true'
@@ -480,6 +518,27 @@ jobs:
             printf "%s\n\n" "${STICKY_MARKER}"
             printf "## ❌ Codex Review failed — \`%s\`\n\n" "${MODEL_ID}"
             printf "The review job failed before producing output. See the run for details.\n\n"
+            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+          } > /tmp/comment.md
+          /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
+
+      - name: Report cancellation into sticky comment
+        # Cancellation (a newer push superseded this run, or the job timed out) is NOT failure(),
+        # so without this the sticky would stay stuck on "🔄 review in progress" forever. Runs in
+        # the cancellation grace period; a single comment update fits well within it.
+        if: cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          # Only possible once we know the PR; if cancelled before that, there's no sticky yet.
+          [ -n "${PR_NUMBER:-}" ] || exit 0
+          RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            printf "%s\n\n" "${STICKY_MARKER}"
+            printf "## ⏱️ Codex Review canceled — \`%s\`\n\n" "${MODEL_ID}"
+            printf "The review run was canceled before completing — superseded by a newer push, or it timed out.\n\n"
             printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
