@@ -303,6 +303,17 @@ jobs:
               det = getattr(resp, "incomplete_details", None) if resp is not None else None
               return getattr(det, "reason", None) if det is not None else None
 
+          def _error(resp):
+              # response.failed carries the service-side reason in response.error (code + message).
+              # We surface it so a failed review says *why* (e.g. "server_error: ...") instead of a
+              # generic "failed before producing output" — usually an AWS/mantle-side issue, not the PR.
+              e = getattr(resp, "error", None) if resp is not None else None
+              if e is None:
+                  return None
+              code = getattr(e, "code", None)
+              msg = getattr(e, "message", None)
+              return f"{code}: {msg}" if (code or msg) else str(e)
+
           try:
               review, resp = stream_review(max_out, effort)
               # Empty answer because reasoning consumed the whole output budget → retry once with
@@ -315,6 +326,12 @@ jobs:
                         f"retrying with max_output_tokens={retry_out}, reasoning_effort={retry_eff}",
                         file=sys.stderr)
                   review, resp = stream_review(retry_out, retry_eff)
+              # A response.failed is often a transient server-side error (HTTP 5xx from mantle).
+              # Retry once with the same parameters before giving up. (Won't rescue a full model
+              # outage — every call fails then — but recovers one-off blips.)
+              elif not review and _status(resp) == "failed":
+                  print(f"::warning::response failed ({_error(resp)}); retrying once", file=sys.stderr)
+                  review, resp = stream_review(max_out, effort)
           except Exception as e:  # noqa: BLE001 — surface any SDK/transport error into the job log
               print(f"::error::mantle request failed: {type(e).__name__}: {str(e)[:500]}", file=sys.stderr)
               sys.exit(1)
@@ -322,6 +339,11 @@ jobs:
           usage = getattr(resp, "usage", None)
           status = _status(resp)
           reason = _reason(resp)
+          err = _error(resp)
+
+          # Log the service error as a job annotation too, so it's visible without reading the comment.
+          if status == "failed":
+              print(f"::error::mantle response failed: {err or 'unknown error'}", file=sys.stderr)
 
           # If the answer came back but was cut off mid-stream by the token cap, keep it and flag it.
           trunc_note = ""
@@ -336,21 +358,30 @@ jobs:
                   f.write(f"⚠️ _Codex could not produce a review: the model exhausted its "
                           f"output-token budget while reasoning (`{reason}`), even after a retry. "
                           f"Raise `max_output_tokens` or lower `reasoning_effort`._\n")
+              elif status == "failed":
+                  f.write(f"⚠️ _Codex could not produce a review — the model service returned an "
+                          f"error:_ `{err or 'unknown error'}`\n\n"
+                          f"_This is typically an AWS / bedrock-mantle service-side issue (e.g. "
+                          f"`server_error`), not a problem with this PR. It usually clears on its "
+                          f"own — re-run the job to retry._\n")
               else:
-                  f.write("_(model returned no text)_\n")
+                  f.write(f"_(model returned no text; status=`{status}`)_\n")
 
           # Outcome flag consumed by the workflow to pick the comment HEADER and the job exit
           # code, so the human-facing status is visible in the sticky header AND in PR checks:
-          #   ok               full review                       -> 🤖 header, job green
-          #   truncated        partial review, hit token cap     -> ⚠️ header, job green
-          #   incomplete-empty no visible text even after retry  -> ❌ header, job RED
-          #   error            empty for an undiagnosed reason    -> generic failure path (exit 1)
+          #   ok               full review                        -> 🤖 header, job green
+          #   truncated        partial review, hit token cap      -> ⚠️ header, job green
+          #   incomplete-empty no visible text even after retry   -> ❌ header, job RED
+          #   failed           model service error (response.error) -> ❌ header + reason, job RED
+          #   error            empty, no diagnosable terminal state -> ❌ header, job RED
           if review and status == "incomplete":
               outcome = "truncated"
           elif review:
               outcome = "ok"
           elif status == "incomplete":
               outcome = "incomplete-empty"
+          elif status == "failed":
+              outcome = "failed"
           else:
               outcome = "error"
           with open("/tmp/outcome.txt", "w", encoding="utf-8") as f:
@@ -369,10 +400,11 @@ jobs:
               f.write(f"in: {it} · out: {ot} (reasoning: {rt}) · total: {tt}")
           print("Tokens:", open("/tmp/usage.txt", encoding="utf-8").read())
 
-          # Hard-fail only when there is genuinely nothing to show AND no diagnosable reason — an
-          # incomplete/truncated response writes an explanatory message above and exits 0 so the
-          # sticky carries the diagnosis instead of a generic "review failed".
-          if not review and status != "incomplete":
+          # Exit 0 whenever we have a terminal response to diagnose (incomplete / failed / empty):
+          # the sticky above carries the specific reason and the workflow's "fail job" step turns
+          # any non-(ok|truncated) outcome into a red ✗. Exit 1 only when there was NO terminal
+          # event at all (resp is None) — the generic "review failed" path handles that case.
+          if resp is None:
               sys.exit(1)
           PY_EOF
           chmod +x /tmp/mantle_review.py
@@ -486,6 +518,8 @@ jobs:
           case "${OUTCOME:-ok}" in
             truncated)        HEADER="## ⚠️ Codex Review — truncated (partial; hit output-token budget)" ;;
             incomplete-empty) HEADER="## ❌ Codex Review — no output (reasoning exhausted the token budget)" ;;
+            failed)           HEADER="## ❌ Codex Review — model service error" ;;
+            error)            HEADER="## ❌ Codex Review — no output" ;;
             *)                HEADER="## 🤖 Codex Review" ;;
           esac
           {
@@ -498,12 +532,16 @@ jobs:
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
 
       - name: Fail job when no review was produced
-        # Top-level signal: after the diagnostic comment is posted above, fail the job so the
-        # "no output" outcome shows as a red ✗ in the PR's checks, not just a buried comment.
+        # Top-level signal: after the diagnostic comment is posted above, fail the job for any
+        # non-review outcome (incomplete-empty / failed / error) so it shows as a red ✗ in the
+        # PR's checks, not just a buried comment. The diagnostic sticky already explains why.
         # (The review is advisory / non-blocking, so this surfaces it without gating merges.)
-        if: steps.invoke.outputs.outcome == 'incomplete-empty'
+        if: |
+          steps.invoke.outputs.has_review == 'true' &&
+          steps.invoke.outputs.outcome != 'ok' &&
+          steps.invoke.outputs.outcome != 'truncated'
         run: |
-          echo "::error::Codex produced no review — the model exhausted its output-token budget while reasoning, even after a retry. Failing the job so the outcome is visible in checks. Raise max_output_tokens or lower reasoning_effort."
+          echo "::error::Codex produced no usable review (outcome: ${{ steps.invoke.outputs.outcome }}). See the sticky comment for the specific reason. Failing the job so the outcome is visible in checks."
           exit 1
 
       - name: Report failure into sticky comment
