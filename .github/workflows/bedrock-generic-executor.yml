@@ -52,10 +52,10 @@ on:
         type: number
         default: 80000
       max_output_tokens:
-        description: 'Maximum tokens the model may emit'
+        description: 'Maximum tokens the model may emit. For reasoning models (e.g. DeepSeek R1) this budget also covers reasoning tokens, so it must be large enough that the answer still fits after thinking.'
         required: false
         type: number
-        default: 2048
+        default: 32000
       timeout_minutes:
         description: 'Job timeout in minutes'
         required: false
