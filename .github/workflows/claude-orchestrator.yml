@@ -91,7 +91,7 @@ on:
         description: 'Max output-token budget for the bedrock-generic and OpenAI/Codex paths. For reasoning models this budget also covers reasoning tokens. Ignored on the Anthropic path (it manages its own budget).'
         required: false
         type: number
-        default: 16000
+        default: 32000
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key — required only when using the direct Anthropic API path (model_id empty)'
