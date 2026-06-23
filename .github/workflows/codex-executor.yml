@@ -139,8 +139,12 @@ jobs:
       MAX_OUTPUT_TOKENS: ${{ inputs.max_output_tokens }}
       REASONING_EFFORT: ${{ inputs.reasoning_effort }}
       # Default uses the model id so different models naturally get different stickies.
-      STICKY_MARKER: ${{ format('<!-- dotcms-ai-review:v3:{0} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id) }}
-      USE_STICKY: ${{ inputs.use_sticky_comment }}
+      # In non-sticky mode the marker carries the head SHA, so a re-run on the same
+      # commit updates its comment in place (in-progress -> final, no orphan) while a
+      # new commit gets a fresh comment — giving per-commit review history. In sticky
+      # mode the marker has no SHA, so one comment is updated across all commits. The
+      # trailing " -->" keeps the sticky marker from being a prefix of the SHA form.
+      STICKY_MARKER: ${{ inputs.use_sticky_comment == false && format('<!-- dotcms-ai-review:v3:{0}:{1} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id, github.event.pull_request.head.sha || github.sha) || format('<!-- dotcms-ai-review:v3:{0} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -165,10 +169,11 @@ jobs:
           cat > /tmp/sticky-comment.sh <<'STICKY_EOF'
           #!/usr/bin/env bash
           # Find-or-update a single PR comment identified by STICKY_MARKER.
-          # When USE_STICKY=false, always post a fresh comment (skip the lookup) so the
-          # full feedback->change->feedback history stays visible to reviewers.
+          # Stickiness is encoded in the marker itself (the caller appends the head
+          # SHA in non-sticky mode), so this just find-or-updates by exact marker:
+          # same marker -> update in place, no match -> fresh comment.
           # Usage: sticky-comment.sh <pr_number> <body_file>
-          # Env:   GH_TOKEN, GITHUB_REPOSITORY, STICKY_MARKER, USE_STICKY (default true)
+          # Env:   GH_TOKEN, GITHUB_REPOSITORY, STICKY_MARKER
           set -euo pipefail
           PR_NUMBER="${1:?pr number required}"
           BODY_FILE="${2:?body file required}"
@@ -176,16 +181,12 @@ jobs:
           : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
           : "${STICKY_MARKER:?STICKY_MARKER must be set}"
           [ -r "$BODY_FILE" ] || { echo "Body file not readable: $BODY_FILE" >&2; exit 1; }
-          if [ "${USE_STICKY:-true}" = "true" ]; then
-            EXISTING_ID=$(
-              gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-                | jq -r --arg marker "$STICKY_MARKER" \
-                    '.[] | select(.body | startswith($marker)) | .id' \
-                | head -1
-            )
-          else
-            EXISTING_ID=""
-          fi
+          EXISTING_ID=$(
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+              | jq -r --arg marker "$STICKY_MARKER" \
+                  '.[] | select(.body | startswith($marker)) | .id' \
+              | head -1
+          )
           if [ -n "$EXISTING_ID" ] && ! [[ "$EXISTING_ID" =~ ^[0-9]+$ ]]; then
             echo "::warning::EXISTING_ID is non-numeric ($EXISTING_ID); creating a new comment instead"
             EXISTING_ID=""
