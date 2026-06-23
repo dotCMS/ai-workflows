@@ -87,6 +87,11 @@ on:
         required: false
         type: string
         default: 'medium'
+      max_output_tokens:
+        description: 'Max output-token budget for the bedrock-generic and OpenAI/Codex paths. For reasoning models this budget also covers reasoning tokens. Ignored on the Anthropic path (it manages its own budget).'
+        required: false
+        type: number
+        default: 16000
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key — required only when using the direct Anthropic API path (model_id empty)'
@@ -209,6 +214,7 @@ jobs:
       aws_region: ${{ inputs.aws_region }}
       prompt: ${{ inputs.prompt }}
       sticky_namespace: ${{ inputs.sticky_namespace }}
+      max_output_tokens: ${{ inputs.max_output_tokens }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}
 
@@ -225,5 +231,6 @@ jobs:
       prompt: ${{ inputs.prompt }}
       sticky_namespace: ${{ inputs.sticky_namespace }}
       reasoning_effort: ${{ inputs.reasoning_effort }}
+      max_output_tokens: ${{ inputs.max_output_tokens }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}
