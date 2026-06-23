@@ -89,6 +89,11 @@ on:
         required: false
         type: string
         default: ''
+      use_sticky_comment:
+        description: 'Reuse one auto-updating comment per PR (true, default). Set false to post a fresh comment on every run, preserving the full feedback->change->feedback history for reviewers.'
+        required: false
+        type: boolean
+        default: true
       max_diff_chars:
         description: 'Maximum diff length to send to the model (chars). Larger diffs are truncated at a line boundary.'
         required: false
@@ -135,6 +140,7 @@ jobs:
       REASONING_EFFORT: ${{ inputs.reasoning_effort }}
       # Default uses the model id so different models naturally get different stickies.
       STICKY_MARKER: ${{ format('<!-- dotcms-ai-review:v3:{0} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id) }}
+      USE_STICKY: ${{ inputs.use_sticky_comment }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -159,8 +165,10 @@ jobs:
           cat > /tmp/sticky-comment.sh <<'STICKY_EOF'
           #!/usr/bin/env bash
           # Find-or-update a single PR comment identified by STICKY_MARKER.
+          # When USE_STICKY=false, always post a fresh comment (skip the lookup) so the
+          # full feedback->change->feedback history stays visible to reviewers.
           # Usage: sticky-comment.sh <pr_number> <body_file>
-          # Env:   GH_TOKEN, GITHUB_REPOSITORY, STICKY_MARKER
+          # Env:   GH_TOKEN, GITHUB_REPOSITORY, STICKY_MARKER, USE_STICKY (default true)
           set -euo pipefail
           PR_NUMBER="${1:?pr number required}"
           BODY_FILE="${2:?body file required}"
@@ -168,12 +176,16 @@ jobs:
           : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
           : "${STICKY_MARKER:?STICKY_MARKER must be set}"
           [ -r "$BODY_FILE" ] || { echo "Body file not readable: $BODY_FILE" >&2; exit 1; }
-          EXISTING_ID=$(
-            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-              | jq -r --arg marker "$STICKY_MARKER" \
-                  '.[] | select(.body | startswith($marker)) | .id' \
-              | head -1
-          )
+          if [ "${USE_STICKY:-true}" = "true" ]; then
+            EXISTING_ID=$(
+              gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+                | jq -r --arg marker "$STICKY_MARKER" \
+                    '.[] | select(.body | startswith($marker)) | .id' \
+                | head -1
+            )
+          else
+            EXISTING_ID=""
+          fi
           if [ -n "$EXISTING_ID" ] && ! [[ "$EXISTING_ID" =~ ^[0-9]+$ ]]; then
             echo "::warning::EXISTING_ID is non-numeric ($EXISTING_ID); creating a new comment instead"
             EXISTING_ID=""
