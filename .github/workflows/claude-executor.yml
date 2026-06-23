@@ -67,6 +67,11 @@ on:
         required: false
         type: string
         default: 'us-east-1'
+      use_sticky_comment:
+        description: 'Reuse one auto-updating comment per PR (true, default). Set false to post a fresh comment on every run, preserving the full feedback history.'
+        required: false
+        type: boolean
+        default: true
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key — required when provider=anthropic-api, ignored otherwise'
@@ -185,7 +190,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ steps.args.outputs.composed }}
-          use_sticky_comment: "true"
+          use_sticky_comment: ${{ inputs.use_sticky_comment }}
           track_progress: "true"
 
       - name: Run Claude Code (Bedrock)
@@ -197,7 +202,7 @@ jobs:
           use_bedrock: "true"
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ steps.args.outputs.composed }}
-          use_sticky_comment: "true"
+          use_sticky_comment: ${{ inputs.use_sticky_comment }}
           track_progress: "true"
         env:
           AWS_REGION: ${{ inputs.aws_region }}

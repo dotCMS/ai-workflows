@@ -34,8 +34,9 @@ The matches for the Anthropic and OpenAI families are anchored: `^([a-z]+\.)?ant
 
 ### Sticky Comments
 
-- The Anthropic path's sticky comment is managed by `anthropics/claude-code-action@v1` via `use_sticky_comment: "true"`.
+- The Anthropic path's sticky comment is managed by `anthropics/claude-code-action@v1` via `use_sticky_comment`.
 - The Bedrock generic path manages its own sticky comment via an inlined find-or-update helper (written to `/tmp` at job start), keyed by a marker `<!-- dotcms-ai-review:v3:<namespace> -->`. The namespace defaults to the model family; consumers can pass `sticky_namespace` to avoid collisions when running multiple review jobs on the same PR.
+- **Disabling stickiness**: pass `use_sticky_comment: false` to the orchestrator (default `true`). When off, every run posts a fresh comment instead of updating one, preserving the full feedback→change→feedback history for reviewers. Applies to all three paths (Anthropic, Bedrock generic, Codex). On the Bedrock/Codex paths this just skips the find-existing lookup so a new comment is always created.
 
 ### Critical Architectural Insight
 

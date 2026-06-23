@@ -82,6 +82,11 @@ on:
         required: false
         type: string
         default: ''
+      use_sticky_comment:
+        description: 'Reuse one auto-updating comment per PR (true, default). Set false to post a fresh comment on every run, preserving the full feedback->change->feedback history for reviewers.'
+        required: false
+        type: boolean
+        default: true
       reasoning_effort:
         description: 'Reasoning effort for the OpenAI/Codex (mantle) path: minimal | low | medium | high. Ignored on other paths.'
         required: false
@@ -201,6 +206,7 @@ jobs:
       model_id: ${{ inputs.model_id }}
       bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
       aws_region: ${{ inputs.aws_region }}
+      use_sticky_comment: ${{ inputs.use_sticky_comment }}
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
@@ -214,6 +220,7 @@ jobs:
       aws_region: ${{ inputs.aws_region }}
       prompt: ${{ inputs.prompt }}
       sticky_namespace: ${{ inputs.sticky_namespace }}
+      use_sticky_comment: ${{ inputs.use_sticky_comment }}
       max_output_tokens: ${{ inputs.max_output_tokens }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}
@@ -230,6 +237,7 @@ jobs:
       aws_region: ${{ inputs.aws_region }}
       prompt: ${{ inputs.prompt }}
       sticky_namespace: ${{ inputs.sticky_namespace }}
+      use_sticky_comment: ${{ inputs.use_sticky_comment }}
       reasoning_effort: ${{ inputs.reasoning_effort }}
       max_output_tokens: ${{ inputs.max_output_tokens }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
