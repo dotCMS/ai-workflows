@@ -307,12 +307,25 @@ jobs:
 
           def converse(messages, system_text, max_tokens=MAX_OUT):
               global tot_in, tot_out, ncalls
-              resp = client.converse(
-                  modelId=MODEL,
-                  messages=messages,
-                  system=[{"text": system_text}],
-                  inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1},
-              )
+              # Some models (e.g. Claude Opus 4.8 and reasoning models) reject `temperature`
+              # on Converse ("temperature is deprecated for this model"). Try with it (lower
+              # variance where supported), and retry without it on that ValidationException —
+              # model-agnostic, no per-model config.
+              inf = {"maxTokens": max_tokens, "temperature": 0.1}
+              try:
+                  resp = client.converse(
+                      modelId=MODEL, messages=messages,
+                      system=[{"text": system_text}], inferenceConfig=inf,
+                  )
+              except Exception as e:  # noqa: BLE001
+                  if "temperature" in str(e).lower():
+                      inf.pop("temperature", None)
+                      resp = client.converse(
+                          modelId=MODEL, messages=messages,
+                          system=[{"text": system_text}], inferenceConfig=inf,
+                      )
+                  else:
+                      raise
               u = resp.get("usage", {})
               tot_in += u.get("inputTokens", 0)
               tot_out += u.get("outputTokens", 0)
