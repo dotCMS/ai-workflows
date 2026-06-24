@@ -1,0 +1,26 @@
+---
+# Self-review: dogfood the reviewer on ai-workflows' own PRs.
+#
+# Uses the LOCAL orchestrator (./.github/workflows/...) so a PR is reviewed by
+# the version of the workflows it itself proposes — changes to the executors
+# are exercised before they ship. model_id is pinned to a non-Anthropic Bedrock
+# model so it routes through bedrock-generic-executor. Requires the org-level
+# BEDROCK_ROLE_ARN variable and that role's OIDC trust to permit this repo.
+
+name: Self Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  claude-automatic-review:
+    uses: ./.github/workflows/claude-orchestrator.yml
+    with:
+      model_id: qwen.qwen3-next-80b-a3b
+      bedrock_role_arn: ${{ vars.BEDROCK_ROLE_ARN }}
+      trigger_mode: automatic
+      prompt: ${{ vars.AI_REVIEWER_PROMPT }}
+      use_sticky_comment: false
+      enable_mention_detection: false
+    secrets: inherit
