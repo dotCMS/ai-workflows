@@ -185,6 +185,34 @@ jobs:
           fi
           echo "number=${PR_NUM}" >> "$GITHUB_OUTPUT"
 
+      # Capture the previous review's machine-data findings BEFORE the
+      # in-progress comment overwrites a sticky comment. Each review appends a
+      # `<!-- dotcms-review-findings:[...] -->` block; we carry the most recent
+      # one forward so the model can mark items Existing/Resolved instead of
+      # re-reviewing statelessly. Works for sticky (one comment) and non-sticky
+      # (per-commit comments) alike — we just take the latest block.
+      - name: Capture prior review findings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          : > /tmp/prior-findings.md
+          FINDINGS=$(
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+              | jq -r '[.[].body | scan("dotcms-review-findings:(\\[.*\\])\\s*-->")[0]] | last // empty'
+          )
+          if [ -n "${FINDINGS}" ] && [ "${FINDINGS}" != "[]" ]; then
+            {
+              printf '## Prior review findings (recheck these)\n\n'
+              echo "${FINDINGS}" | jq -r '.[] | "- \(.sev): `\(.loc)` — \(.desc)"'
+              printf '\n'
+            } > /tmp/prior-findings.md
+            echo "Carried forward $(echo "${FINDINGS}" | jq 'length') prior finding(s)"
+          else
+            echo "No prior findings to carry forward"
+          fi
+
       - name: Post in-progress sticky comment
         env:
           GH_TOKEN: ${{ github.token }}
@@ -230,6 +258,12 @@ jobs:
           fi
           {
             printf "%s\n\n" "${REVIEW_PROMPT}"
+            # Carried-forward findings from the previous review, if any. The
+            # prompt's "If a Prior review findings section is present" rules
+            # consume this to populate the Existing/Resolved sections.
+            if [ -s /tmp/prior-findings.md ]; then
+              cat /tmp/prior-findings.md
+            fi
             printf -- "--- BEGIN DIFF ---\n"
             cat /tmp/pr.diff
             printf -- "\n--- END DIFF ---\n"
