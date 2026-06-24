@@ -97,6 +97,16 @@ on:
         required: false
         type: number
         default: 32000
+      agentic:
+        description: 'On the generic Bedrock-Converse path, route to the agentic harness executor (model can read the repo via tools, posts inline comments, can gate on severity) instead of the single-shot diff reviewer. No effect on the Anthropic or OpenAI/Codex paths.'
+        required: false
+        type: boolean
+        default: false
+      block_severities:
+        description: 'Agentic harness only: comma-separated severities that FAIL the check when present (e.g. "critical,high"). "none" = advisory.'
+        required: false
+        type: string
+        default: 'critical,high'
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key — required only when using the direct Anthropic API path (model_id empty)'
@@ -163,6 +173,7 @@ jobs:
         env:
           MODEL_ID: ${{ inputs.model_id }}
           BEDROCK_ROLE_ARN: ${{ inputs.bedrock_role_arn }}
+          AGENTIC: ${{ inputs.agentic }}
         run: |
           set -euo pipefail
           if [ -z "${MODEL_ID}" ]; then
@@ -180,6 +191,13 @@ jobs:
             PROVIDER="openai-mantle"
           else
             PROVIDER="bedrock-generic"
+          fi
+
+          # The agentic harness is an opt-in upgrade of the generic Converse path only: same
+          # cheap model, but it can read the repo via tools, post inline comments, and gate on
+          # severity. Anthropic (already agentic) and OpenAI/Codex paths ignore the flag.
+          if [ "${PROVIDER}" = "bedrock-generic" ] && [ "${AGENTIC}" = "true" ]; then
+            PROVIDER="bedrock-harness"
           fi
 
           # Validate bedrock_role_arn is present whenever we route to a Bedrock path.
@@ -222,6 +240,22 @@ jobs:
       sticky_namespace: ${{ inputs.sticky_namespace }}
       use_sticky_comment: ${{ inputs.use_sticky_comment }}
       max_output_tokens: ${{ inputs.max_output_tokens }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+      runner: ${{ inputs.runner }}
+
+  bedrock-harness:
+    needs: route
+    if: needs.route.outputs.provider == 'bedrock-harness'
+    uses: ./.github/workflows/bedrock-harness-executor.yml
+    with:
+      model_id: ${{ inputs.model_id }}
+      bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
+      aws_region: ${{ inputs.aws_region }}
+      prompt: ${{ inputs.prompt }}
+      sticky_namespace: ${{ inputs.sticky_namespace }}
+      use_sticky_comment: ${{ inputs.use_sticky_comment }}
+      max_output_tokens: ${{ inputs.max_output_tokens }}
+      block_severities: ${{ inputs.block_severities }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}
 
