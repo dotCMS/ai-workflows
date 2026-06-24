@@ -9,3 +9,5 @@ def show_ref_log() -> None:
     subprocess.run("git log " + ref, shell=True)
 
 # (smoke: re-run on beta.4)
+
+# (smoke: re-run on beta.5 dedup)
