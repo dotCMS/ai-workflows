@@ -399,8 +399,9 @@ jobs:
               words = re.findall(r"[a-z0-9_]+", (str(f.get("title", "")) + " " + str(f.get("description", ""))).lower())
               return {w for w in words if len(w) > 2 and w not in _STOP}
 
-          def _score(f):  # lower is better: prefer a line number, then higher severity
-              return (0 if f.get("line") else 1, SEV_RANK.get(str(f.get("severity", "")).lower(), 4))
+          def _score(f):  # lower is better: prefer confirmed, then a line number, then higher severity
+              return (0 if f.get("confirmed") else 1, 0 if f.get("line") else 1,
+                      SEV_RANK.get(str(f.get("severity", "")).lower(), 4))
 
           def dedupe(items):
               kept = []
@@ -455,9 +456,14 @@ jobs:
                   + '<action>{"tool":"run","args":{"cmd":"grep -rn someSymbol ."}}</action>\n'
                   + "Commands run in a READ-ONLY, network-less sandbox (writes/network fail). When decided, "
                   + "reply with ONLY this JSON object and nothing else:\n"
-                  + '{"verdict":"confirmed|refuted","severity":"Critical|High|Medium|Low","line":<int>,'
-                  + '"title":"...","description":"why it is a real issue, citing the evidence"}\n'
-                  + "Refute if you cannot find clear evidence — do NOT confirm on suspicion." + SECURITY
+                  + '{"verdict":"confirmed|refuted|uncertain","severity":"Critical|High|Medium|Low","line":<int>,'
+                  + '"title":"...","description":"the issue and the evidence for your verdict"}\n'
+                  + "Rules: CONFIRM if the evidence supports a real issue. REFUTE only if you find POSITIVE "
+                  + "evidence it is NOT a real issue (the code already handles it, the claim misreads the code, "
+                  + "the value is safe/bounded, or the path is unreachable) — and state that reason. If you can "
+                  + "neither confirm nor disprove it, return UNCERTAIN — do NOT refute merely because evidence is "
+                  + "incomplete or the sandbox limited your search. Refuting a real bug is worse than flagging an "
+                  + "uncertain one." + SECURITY
               )
               msgs = [{"role": "user", "content": [{"text":
                   f"Suspected {cand.get('severity','?')} issue in {cand.get('file')} near line "
@@ -488,8 +494,15 @@ jobs:
           norm = []
           for cand in candidates:
               v = verify(cand)
-              if not isinstance(v, dict) or str(v.get("verdict", "")).lower() != "confirmed":
+              if not isinstance(v, dict):
                   continue
+              verdict = str(v.get("verdict", "")).lower()
+              # Drop ONLY positively-disproven candidates. "uncertain" (couldn't confirm OR
+              # disprove) is KEPT as advisory — this is the calibration fix: a refute requires
+              # positive disproof, so cautious models no longer nuke their own real findings.
+              if verdict == "refuted":
+                  continue
+              confirmed = verdict == "confirmed"
               file = str(cand.get("file", "")).strip()
               line = v.get("line", cand.get("line"))
               sev = str(v.get("severity") or cand.get("severity") or "").strip()
@@ -500,21 +513,36 @@ jobs:
                   "location": f"{file}:{line}" if file and line else (file or "?"),
                   "title": str(v.get("title") or cand.get("title", "")).strip(),
                   "description": str(v.get("description", "")).strip(),
+                  "confirmed": confirmed,
               })
           norm = dedupe(norm)  # final collapse — verify can re-confirm one root cause from 2 candidates
 
           # ---- build the human summary deterministically --------------------------------
+          # Confirmed findings first, then uncertain (kept-but-unverified) under their own
+          # heading so reviewers can tell evidence-backed from "couldn't confirm or disprove".
           EMO = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🔵"}
-          body = []
-          for fnd in sorted(norm, key=lambda f: SEV_RANK.get(f["severity"].lower(), 4)):
-              body.append(f"- {EMO.get(fnd['severity'].lower(), '⚪')} **{fnd['severity']}** "
-                          f"`{fnd['location']}` — {fnd['title']}\n  {fnd['description']}")
-          summary = [f"Reviewed {len(segments)} file(s); {len(candidates)} candidate(s); "
-                     f"**{len(norm)} confirmed** after verification."]
+          n_conf = sum(1 for f in norm if f.get("confirmed"))
+          n_unc = len(norm) - n_conf
+
+          def _lines(items):
+              return "\n".join(
+                  f"- {EMO.get(f['severity'].lower(), '⚪')} **{f['severity']}** "
+                  f"`{f['location']}` — {f['title']}\n  {f['description']}"
+                  for f in sorted(items, key=lambda f: SEV_RANK.get(f["severity"].lower(), 4)))
+
+          confirmed = [f for f in norm if f.get("confirmed")]
+          uncertain = [f for f in norm if not f.get("confirmed")]
+          summary = [f"Reviewed {len(segments)} file(s); {len(candidates)} candidate(s) → "
+                     f"**{n_conf} confirmed**, {n_unc} uncertain (unverified, kept for review)."]
           if dropped_files or dropped_cands:
               summary.append(f"\n> ⚠️ Coverage capped: {dropped_files} file(s) + {dropped_cands} lower-severity "
                              f"candidate(s) skipped (limits: {FILE_CAP} files, {CAND_CAP} candidates).")
-          summary.append("\n#### Findings\n" + "\n".join(body) if body else "\n✅ No issues confirmed after verification.")
+          if confirmed:
+              summary.append("\n#### Confirmed findings\n" + _lines(confirmed))
+          if uncertain:
+              summary.append("\n#### 🔎 Uncertain (could not confirm or disprove — review manually)\n" + _lines(uncertain))
+          if not norm:
+              summary.append("\n✅ No issues found after verification.")
           review_md = "\n".join(summary)
 
           with open("/tmp/findings.json", "w", encoding="utf-8") as f:
@@ -526,7 +554,7 @@ jobs:
           with open("/tmp/outcome.txt", "w", encoding="utf-8") as f:
               f.write("ok")
           print(f"outcome: ok; files: {len(segments)}; candidates: {len(candidates)}; "
-                f"confirmed: {len(norm)}; calls: {ncalls}; tokens in/out: {tot_in}/{tot_out}", file=sys.stderr)
+                f"confirmed: {n_conf}; uncertain: {n_unc}; calls: {ncalls}; tokens in/out: {tot_in}/{tot_out}", file=sys.stderr)
           PY_EOF
           chmod +x /tmp/bedrock_review.py
 
@@ -634,11 +662,11 @@ jobs:
           # an enhancement on top of the summary, not a replacement for it.
           COMMIT_ID="${HEAD_SHA}"
           [ -n "${COMMIT_ID}" ] || COMMIT_ID="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          COUNT=$(jq '[.[] | select((.severity|ascii_downcase) as $s | $s=="critical" or $s=="high") | select(.file!="" and .line!=null)] | length' /tmp/findings.json)
+          COUNT=$(jq '[.[] | select(.confirmed == true) | select((.severity|ascii_downcase) as $s | $s=="critical" or $s=="high") | select(.file!="" and .line!=null)] | length' /tmp/findings.json)
           echo "inline candidates: ${COUNT}"
           for i in $(seq 0 $((COUNT - 1))); do
             [ "${COUNT}" -gt 0 ] || break
-            F=$(jq -c "[.[] | select((.severity|ascii_downcase) as \$s | \$s==\"critical\" or \$s==\"high\") | select(.file!=\"\" and .line!=null)][${i}]" /tmp/findings.json)
+            F=$(jq -c "[.[] | select(.confirmed == true) | select((.severity|ascii_downcase) as \$s | \$s==\"critical\" or \$s==\"high\") | select(.file!=\"\" and .line!=null)][${i}]" /tmp/findings.json)
             SEV=$(jq -r '.severity' <<<"$F")
             FILE=$(jq -r '.file' <<<"$F")
             LINE=$(jq -r '.line' <<<"$F")
@@ -688,7 +716,7 @@ jobs:
         run: |
           set -euo pipefail
           BLOCKING=$(jq --arg sevs "${BLOCK_SEVERITIES}" \
-            '[ (.[]) | (.severity|ascii_downcase) as $s | select(($sevs|ascii_downcase|split(",")|map(gsub("^\\s+|\\s+$";""))) | index($s)) ]' \
+            '[ (.[]) | select(.confirmed == true) | (.severity|ascii_downcase) as $s | select(($sevs|ascii_downcase|split(",")|map(gsub("^\\s+|\\s+$";""))) | index($s)) ]' \
             /tmp/findings.json)
           N=$(jq 'length' <<<"$BLOCKING")
           if [ "$N" -gt 0 ]; then
