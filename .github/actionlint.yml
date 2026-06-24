@@ -3,6 +3,11 @@ paths:
   # This example configures any YAML file under the '.github/workflows/' directory.
   .github/workflows/**/*.{yml,yaml}:
     # List of regular expressions to filter errors by the error messages.
-    #ignore:
+    ignore:
+      # actionlint 1.7.7's bundled context schema predates github.job_workflow_sha,
+      # a real runtime value in reusable workflows (commit SHA of the reusable
+      # workflow file). The orchestrator uses it to check out this repo at the
+      # pinned version to read .github/prompts/default-review.md.
+      - 'property "job_workflow_sha" is not defined'
       # Ignore the specific error from shellcheck
       #- 'shellcheck reported issue in this script: SC2086:.+'
