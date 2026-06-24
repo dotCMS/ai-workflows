@@ -17,7 +17,7 @@ on:
 
 jobs:
   claude-automatic-review:
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3.3.0-beta.1
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3.3.0-beta.2
     with:
       model_id: qwen.qwen3-next-80b-a3b
       bedrock_role_arn: ${{ vars.BEDROCK_ROLE_ARN }}
