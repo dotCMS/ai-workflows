@@ -286,3 +286,25 @@ jobs:
             printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
+
+      - name: Report cancellation into sticky comment
+        # Cancellation (a newer push superseded this run, or the job timed out) is NOT failure(),
+        # so without this the sticky stays stuck on "🔄 review in progress" forever. Runs in the
+        # cancellation grace period; a single comment update fits well within it. Mirrors the
+        # codex-executor handler so both generic executors clean up cancelled runs identically.
+        if: cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          # Only possible once we know the PR; if cancelled before that, there's no sticky yet.
+          [ -n "${PR_NUMBER:-}" ] || exit 0
+          RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            printf "%s\n\n" "${STICKY_MARKER}"
+            printf "## ⏱️ Bedrock Review canceled — \`%s\`\n\n" "${MODEL_ID}"
+            printf "The review run was canceled before completing — superseded by a newer push, or it timed out.\n\n"
+            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+          } > /tmp/comment.md
+          /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
