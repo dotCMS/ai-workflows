@@ -596,8 +596,8 @@ jobs:
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "🔄 **Agentic Bedrock review in progress** — model: \`%s\`\n\n" "${MODEL_ID}"
-            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+            printf "### 🔄 dotBot Review (Bedrock) — in progress\n\n"
+            printf "<sub>**%s** · Run: [#%s](%s)</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
 
@@ -692,17 +692,17 @@ jobs:
           USAGE=$(cat /tmp/usage.txt)
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           case "${OUTCOME:-error}" in
-            ok)   HEADER="## 🤖 Agentic Bedrock Review" ;;
-            no-findings-block) HEADER="## ⚠️ Agentic Bedrock Review — could not parse findings (advisory)" ;;
-            *)    HEADER="## ❌ Agentic Bedrock Review — no output" ;;
+            ok)   HEADER="### 🤖 dotBot Review (Bedrock)" ;;
+            no-findings-block) HEADER="### ⚠️ dotBot Review (Bedrock) — could not parse findings (advisory)" ;;
+            *)    HEADER="### ❌ dotBot Review (Bedrock) — no output" ;;
           esac
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "%s — \`%s\`\n\n" "${HEADER}" "${MODEL_ID}"
+            printf "%s\n\n" "${HEADER}"
             cat /tmp/review.md
             printf "\n\n<!-- dotcms-review-findings:%s -->\n" "$(cat /tmp/findings.json)"
             printf "\n---\n"
-            printf "<sub>Run: [#%s](%s) · tokens: %s</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}" "${USAGE}"
+            printf "<sub>**%s** · Run: [#%s](%s) · tokens: %s</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}" "${USAGE}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
 
@@ -736,9 +736,9 @@ jobs:
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "## ❌ Agentic Bedrock Review failed — \`%s\`\n\n" "${MODEL_ID}"
+            printf "### ❌ dotBot Review (Bedrock) — failed\n\n"
             printf "The review job failed before producing output. See the run for details.\n\n"
-            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+            printf "<sub>**%s** · Run: [#%s](%s)</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
 
@@ -753,8 +753,8 @@ jobs:
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "## ⏱️ Agentic Bedrock Review canceled — \`%s\`\n\n" "${MODEL_ID}"
+            printf "### ⏱️ dotBot Review (Bedrock) — canceled\n\n"
             printf "The run was canceled before completing — superseded by a newer push, or it timed out.\n\n"
-            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+            printf "<sub>**%s** · Run: [#%s](%s)</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
