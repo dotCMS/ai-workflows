@@ -19,8 +19,16 @@
 # model that can't follow the protocol simply returns its review early (degrades to the
 # single-shot behavior of the generic executor; it never breaks).
 #
-# TOOLS ARE READ-ONLY: grep (ripgrep), read_file, list_dir — all confined to the checked-out
-# consumer repo (path traversal rejected). No write, no shell, no network. Clean blast radius.
+# TOOLS — GENERAL SHELL (not a fixed tool set): the model gets one `run` tool that executes an
+# arbitrary command in the checked-out repo. This is deliberate — the reviewer runs across many
+# repos and tech stacks, so it must DISCOVER structure and reach for whatever tooling a given repo
+# uses (git, grep/rg, find, language / type / dependency tools) rather than a hardcoded, assumption-
+# laden trio. Commands run from the repo root with a per-command timeout and capped output; those
+# are resource bounds, NOT capability limits.
+# SECURITY: CI already executes repo code (build/test steps), so a shell is not a categorically new
+# surface for same-repo PRs, and the job carries only the permissions it already has. The PR diff and
+# all tool results are still treated as untrusted DATA (see below). Operators wiring this on PUBLIC
+# repos / fork PRs should scope the OIDC role minimally and must NOT use pull_request_target.
 #
 # PROMPT-INJECTION POSTURE: the trusted review prompt is the Converse `system` block; the PR
 # diff and all tool results arrive as `user` content explicitly framed as untrusted DATA to be
@@ -212,47 +220,33 @@ jobs:
               except Exception:
                   prior = []
 
-          # ---- read-only tools, confined to REPO_DIR -------------------------------------
-          def _safe(path):
-              # Resolve under REPO_DIR; reject traversal / absolute escapes.
-              full = os.path.realpath(os.path.join(REPO_DIR, path))
-              if full != REPO_DIR and not full.startswith(REPO_DIR + os.sep):
-                  raise ValueError(f"path escapes repo: {path}")
-              return full
+          # ---- tool layer: ONE general shell, so the reviewer adapts to any repo/tech --------
+          # A fixed tool trio (grep/read_file/list_dir) bakes in assumptions about layout and
+          # tooling. A monorepo with N submodules in N languages needs N different validation
+          # skills — so we hand the model a shell and let it pick. Output is capped and each call
+          # times out; those are resource bounds, not capability limits.
+          CMD_TIMEOUT = 60  # seconds per command
 
           def _cap(s):
               return s if len(s) <= TOOL_RESULT_CAP else s[:TOOL_RESULT_CAP] + "\n…[truncated]"
 
-          def tool_grep(args):
-              pattern = args["pattern"]
-              glob = args.get("glob")
-              cmd = ["rg", "--line-number", "--no-heading", "--color", "never",
-                     "--max-columns", "300", "-S", "--max-count", "50"]
-              if glob:
-                  cmd += ["-g", glob]
-              cmd += ["-e", pattern, REPO_DIR]
-              p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-              if p.returncode not in (0, 1):  # 1 = no matches, not an error
-                  return f"grep error: {p.stderr.strip()[:500]}"
-              out = p.stdout.replace(REPO_DIR + os.sep, "")
-              return _cap(out) if out.strip() else "(no matches)"
+          def tool_run(args):
+              cmd = (args.get("cmd") or "").strip()
+              if not cmd:
+                  return "run: empty cmd"
+              try:
+                  p = subprocess.run(cmd, shell=True, cwd=REPO_DIR, capture_output=True,
+                                     text=True, timeout=CMD_TIMEOUT)
+              except subprocess.TimeoutExpired:
+                  return f"run: command timed out after {CMD_TIMEOUT}s"
+              out = p.stdout or ""
+              if p.stderr:
+                  out += "\n[stderr]\n" + p.stderr
+              out = out.replace(REPO_DIR + os.sep, "")
+              prefix = "" if p.returncode == 0 else f"[exit {p.returncode}]\n"
+              return _cap(prefix + out) if out.strip() else (prefix or "(no output)")
 
-          def tool_read_file(args):
-              full = _safe(args["path"])
-              start = int(args.get("start", 1))
-              end = int(args.get("end", start + 399))
-              with open(full, encoding="utf-8", errors="replace") as fh:
-                  lines = fh.readlines()
-              chunk = lines[max(0, start - 1):end]
-              body = "".join(f"{i}\t{ln}" for i, ln in enumerate(chunk, start))
-              return _cap(body) if body else "(empty / out of range)"
-
-          def tool_list_dir(args):
-              full = _safe(args.get("path", "."))
-              entries = sorted(os.listdir(full))
-              return _cap("\n".join(e + ("/" if os.path.isdir(os.path.join(full, e)) else "") for e in entries))
-
-          TOOLS = {"grep": tool_grep, "read_file": tool_read_file, "list_dir": tool_list_dir}
+          TOOLS = {"run": tool_run}
 
           def run_tool(action):
               name = action.get("tool")
@@ -280,15 +274,19 @@ jobs:
           system_text = (
               review_rules
               + "\n\n--- HOW TO REVIEW ---\n"
-              + "The repository is checked out at the current working directory. You may gather context "
-              + "with read-only tools BEFORE judging. To call a tool, reply with EXACTLY ONE action block "
-              + "and nothing else:\n"
-              + '<action>{"tool":"grep","args":{"pattern":"createCluster","glob":"*.ts"}}</action>\n'
-              + '<action>{"tool":"read_file","args":{"path":"src/db/schema.sql","start":1,"end":120}}</action>\n'
-              + '<action>{"tool":"list_dir","args":{"path":"src/db"}}</action>\n'
-              + f"You may call tools up to {MAX_ITERS} times. When you have enough context, STOP calling "
-              + "tools and reply with your review as GitHub-flavored markdown, then END with one machine-"
-              + "readable findings block (and nothing after it):\n"
+              + "The repository is checked out at the current working directory and you have a SHELL to "
+              + "explore it before judging — never guess about code you can inspect. This may be a monorepo "
+              + "with multiple submodules in different languages; figure out which part the diff touches and "
+              + "use that stack's own tooling. To run a command, reply with EXACTLY ONE action block and "
+              + "nothing else:\n"
+              + '<action>{"tool":"run","args":{"cmd":"ls -a && cat */package.json pom.xml go.mod 2>/dev/null | head"}}</action>\n'
+              + '<action>{"tool":"run","args":{"cmd":"git log --oneline -5"}}</action>\n'
+              + "Run whatever READ-ONLY commands fit this repo — ls, find, cat, grep/rg, git, or a "
+              + "submodule's type-check / lint / dependency tool to validate the change. Each runs from the "
+              + "repo root with a short timeout; avoid commands that mutate files or need network access. "
+              + f"You may run up to {MAX_ITERS} commands. When you have enough context, STOP calling tools "
+              + "and reply with your review as GitHub-flavored markdown, then END with one machine-readable "
+              + "findings block (and nothing after it):\n"
               + '<findings>[{"severity":"Critical","file":"src/x.ts","line":42,"title":"short title",'
               + '"description":"what is wrong and why"}]</findings>\n'
               + "severity is one of Critical, High, Medium, Low. Use the file path relative to the repo "
