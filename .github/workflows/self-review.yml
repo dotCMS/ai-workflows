@@ -1,13 +1,10 @@
 ---
 # Self-review: run the reviewer on ai-workflows' own PRs.
 #
-# Pinned to the @v3.3.0-beta.8 orchestrator with agentic: true, so this DOGFOODS the
-# new agentic bedrock-harness executor (the model reaches for repo context via a shell,
-# posts inline comments, and gates on Critical/High) on this repo's own PRs — including
-# the PR that introduced it. Same cheap qwen model. Repin to @v3.3.0 once stable is cut.
-# (NB: agentic:true requires >= v3.3.0-beta; the @v3 stable orchestrator has no such input.)
-# Requires the org-level BEDROCK_ROLE_ARN variable and that role's OIDC trust to permit
-# this repo.
+# Pinned to the released @v3 orchestrator (same as consumer repos). model_id is
+# a non-Anthropic Bedrock model so it routes through bedrock-generic-executor.
+# Requires the org-level BEDROCK_ROLE_ARN variable and that role's OIDC trust to
+# permit this repo.
 
 name: Self Review
 
@@ -15,21 +12,13 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
-# The orchestrator → harness chain requests id-token: write (OIDC→Bedrock) +
-# pull-requests: write; the top caller must grant them or the reusable call fails at startup.
-permissions:
-  id-token: write
-  contents: read
-  pull-requests: write
-
 jobs:
   claude-automatic-review:
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3.3.0-beta.8
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
     with:
       model_id: qwen.qwen3-next-80b-a3b
       bedrock_role_arn: ${{ vars.BEDROCK_ROLE_ARN }}
       trigger_mode: automatic
-      agentic: true
       prompt: ${{ vars.AI_REVIEWER_PROMPT }}
       use_sticky_comment: false
       enable_mention_detection: false
