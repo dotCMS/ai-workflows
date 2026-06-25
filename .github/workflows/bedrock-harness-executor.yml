@@ -511,8 +511,11 @@ jobs:
                   "file": file,
                   "line": line,
                   "location": f"{file}:{line}" if file and line else (file or "?"),
-                  "title": str(v.get("title") or cand.get("title", "")).strip(),
-                  "description": str(v.get("description", "")).strip(),
+                  # Neutralize "-->" so a model-written title/description can't terminate the
+                  # HTML <!-- dotcms-review-findings:… --> marker (would corrupt the comment AND
+                  # break carry-forward parsing). Self-review caught this.
+                  "title": str(v.get("title") or cand.get("title", "")).strip().replace("-->", "-- >"),
+                  "description": str(v.get("description", "")).strip().replace("-->", "-- >"),
                   "confirmed": confirmed,
               })
           norm = dedupe(norm)  # final collapse — verify can re-confirm one root cause from 2 candidates
