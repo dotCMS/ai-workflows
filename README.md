@@ -64,7 +64,7 @@ If you previously used the pilot Claude workflow in `dotcms/infrastructure-as-co
    ```yaml
    jobs:
      claude:
-       uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+       uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
        with:
          trigger_mode: automatic  # or 'interactive' for @claude mentions
          # Customize as needed for your repo
@@ -78,7 +78,9 @@ If you previously used the pilot Claude workflow in `dotcms/infrastructure-as-co
          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
    ```
 
-   ⚠️ **Important**: Always use version tags (e.g., `@v1.0.0`) instead of `@main` for production stability. Using `@main` can cause unexpected behavior when the main branch is updated.
+   ⚠️ **Important**: Always use the floating major tag (e.g., `@v3`) instead of `@main` for production stability. Using `@main` can cause unexpected behavior when the main branch is updated.
+
+   > **Current setup (v3+):** reviews run on **AWS Bedrock**. Set `BEDROCK_MODEL_ID` and `BEDROCK_ROLE_ARN` as repo/org variables — **no `ANTHROPIC_API_KEY` secret is required**. The `ANTHROPIC_API_KEY` references below are legacy. For an up-to-date, copy-pasteable setup see [`examples/consumer-repo-workflow.yml`](./examples/consumer-repo-workflow.yml) and [`examples/infrastructure-consumer-workflow.yml`](./examples/infrastructure-consumer-workflow.yml), which are the canonical reference.
 
 3. **Configure your `ANTHROPIC_API_KEY` secret** as described below.
 4. **(Optional) Customize prompts, allowed tools, and runner as needed.**
@@ -230,7 +232,7 @@ jobs:
         contains(github.event.pull_request.body, '@Claude') ||
         contains(github.event.pull_request.body, '@CLAUDE')
       )
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
     with:
       trigger_mode: interactive
       allowed_tools: |
@@ -243,7 +245,7 @@ jobs:
   # Automatic PR reviews (orchestrator skips when @claude mention exists by default)
   claude-automatic:
     if: github.event_name == 'pull_request'
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
     with:
       trigger_mode: automatic
       direct_prompt: |
@@ -277,7 +279,7 @@ For advanced use cases beyond @claude mentions, use `custom_trigger_condition`:
 ```yaml
 jobs:
   claude-security-review:
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
     with:
       trigger_mode: automatic
       custom_trigger_condition: |
@@ -330,7 +332,7 @@ See the `examples/` directory for complete workflow examples:
 
 **Basic @claude mention detection:**
 ```yaml
-uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
 with:
   trigger_mode: interactive
   enable_mention_detection: true
@@ -338,7 +340,7 @@ with:
 
 **Automatic PR reviews:**
 ```yaml
-uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
 with:
   trigger_mode: automatic
   direct_prompt: "Review this PR for quality and security."
@@ -347,7 +349,7 @@ with:
 
 **Custom triggers for urgent issues:**
 ```yaml
-uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
 with:
   trigger_mode: interactive
   custom_trigger_condition: |
@@ -411,11 +413,11 @@ This repository is designed for both internal dotCMS use and external sharing:
 
 ### Version Tags
 
-**Always use version tags** (`@v1.0.0`) instead of `@main` for production stability:
+**Always use a version tag** (`@v3`) instead of `@main` for production stability:
 
 ```yaml
 # ✅ Production-safe
-uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
 
 # ❌ Unstable - avoid for production
 uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@main

@@ -1,5 +1,10 @@
 # Example workflow for a consumer repository
 # This file should be placed in .github/workflows/ in the consuming repository
+#
+# MODEL: reviews run on AWS Bedrock. Set the model via the repo/org variable
+# BEDROCK_MODEL_ID and the IAM role via BEDROCK_ROLE_ARN. The orchestrator routes
+# by model id: anthropic.* -> Claude, openai.* -> Bedrock-mantle (codex), everything
+# else -> bedrock-generic (Converse). No ANTHROPIC_API_KEY needed.
 
 name: Claude AI Integration
 
@@ -40,8 +45,10 @@ jobs:
         contains(github.event.pull_request.body, '@Claude') ||
         contains(github.event.pull_request.body, '@CLAUDE')
       )
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v2.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
     with:
+      model_id: ${{ vars.BEDROCK_MODEL_ID }}
+      bedrock_role_arn: ${{ vars.BEDROCK_ROLE_ARN }}
       trigger_mode: interactive
       claude_args: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes: 15
@@ -49,24 +56,37 @@ jobs:
       enable_mention_detection: true  # Uses built-in @claude mention detection
       # custom_trigger_condition: |    # Optional: Override default mention detection
       #   your custom condition here
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
   # Automatic PR reviews (orchestrator skips when @claude mention is present by default)
   claude-automatic-review:
     if: github.event_name == 'pull_request'
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v2.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
     with:
+      model_id: ${{ vars.BEDROCK_MODEL_ID }}
+      bedrock_role_arn: ${{ vars.BEDROCK_ROLE_ARN }}
       trigger_mode: automatic
+      # Terse, structured review prompt. One line per finding, severity + file:line,
+      # no essays. Mirrors the format proven in dotCMS/core's automatic review.
       prompt: |
-        Please review this pull request and provide feedback on:
-        - Code quality and best practices
-        - Potential bugs or issues
-        - Performance considerations
-        - Security concerns
-        - Test coverage
+        You are reviewing a pull request. Review only what's in the diff. Be direct
+        and specific — include file and line for every finding. Skip praise, summaries,
+        and style nitpicks. Do not invent issues. Only flag problems this PR introduces.
 
-        Be constructive and helpful in your feedback.
+        Check for:
+        1. **Bugs** — logic errors, null/undefined deref, off-by-one, missing edge
+           cases, race conditions
+        2. **Security** — injection, missing authz checks, secrets in code or logs,
+           unvalidated input used in paths or system calls
+        3. **Error paths** — for each external call or state change, what happens when
+           it fails? Caught, logged, surfaced, or silently swallowed?
+        4. **Missing code** — no timeout, no rollback, no error handler, no test for
+           the failure case. Half of bugs are a correct line never written.
+        5. **Test gaps** — meaningful new behavior with no coverage
+
+        Format each finding as a single line, severity first:
+        🔴 **Critical** / 🟠 **High** / 🟡 **Medium** `path/file:line` — what's wrong and why it matters
+
+        🔴/🟠 are blocking; 🟡 is non-blocking. If the PR is clean, say so in one sentence.
       claude_args: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes: 15
       runner: ubuntu-latest
@@ -74,5 +94,3 @@ jobs:
       # skip_automatic_when_mentioned: false  # Optional: allow automatic mode even with @claude mention
       # custom_trigger_condition: |     # Optional: Custom trigger logic
       #   your custom condition here
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

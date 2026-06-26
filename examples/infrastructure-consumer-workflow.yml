@@ -2,6 +2,13 @@
 # Infrastructure-as-Code Consumer Workflow Example
 # This example shows how to configure Claude workflows for infrastructure repositories
 # with Terraform, Terragrunt, and Kubernetes-specific tooling.
+#
+# MODEL: chosen by the repo var AI_REVIEW_MODEL_ID (falls back to the org/repo
+# BEDROCK_MODEL_ID). It's a *repo* var on purpose — tuning it changes only this
+# repo's review model without touching the org var the rest of the fleet shares.
+# The orchestrator routes by id: anthropic.* -> Claude, openai.* -> Bedrock-mantle
+# (codex), everything else -> bedrock-generic. Reviews run on Bedrock via
+# BEDROCK_ROLE_ARN — no ANTHROPIC_API_KEY needed.
 
 name: Infrastructure AI Checks
 
@@ -47,8 +54,10 @@ jobs:
         contains(github.event.pull_request.body, '@Claude') ||
         contains(github.event.pull_request.body, '@CLAUDE')
       )
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v2.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
     with:
+      model_id: ${{ vars.AI_REVIEW_MODEL_ID || vars.BEDROCK_MODEL_ID }}
+      bedrock_role_arn: ${{ vars.BEDROCK_ROLE_ARN }}
       trigger_mode: interactive
       claude_args: '--allowedTools "Bash(terraform validate),Bash(terraform plan),Bash(terraform fmt),Bash(terragrunt validate),Bash(terragrunt plan),Bash(terragrunt hclfmt),Bash(git status),Bash(git diff)"'
       timeout_minutes: 15
@@ -56,28 +65,40 @@ jobs:
       enable_mention_detection: true  # Uses built-in @claude mention detection
       # custom_trigger_condition: |    # Optional: Custom trigger logic
       #   github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'infrastructure')
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
   # Automatic PR reviews (orchestrator skips when @claude mention is present by default)
   claude-automatic-review:
     if: github.event_name == 'pull_request'
-    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v2.0.0
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
     with:
+      model_id: ${{ vars.AI_REVIEW_MODEL_ID || vars.BEDROCK_MODEL_ID }}
+      bedrock_role_arn: ${{ vars.BEDROCK_ROLE_ARN }}
       trigger_mode: automatic
+      # Terse, structured review prompt tuned for IaC. One line per finding,
+      # severity + file:line, no essays. Mirrors dotCMS/core's review format.
       prompt: |
-        Please review this infrastructure-as-code pull request and provide feedback on:
-        - Code quality and best practices
-        - Potential bugs or issues
-        - Performance considerations
-        - Security concerns
-        - Test coverage
-        - Estimated cost spend or savings of the changes
-        - Terraform/Terragrunt best practices
-        - Resource naming conventions
-        - Infrastructure security implications
+        You are reviewing a pull request for **infrastructure-as-code**
+        (Terraform + Terragrunt on AWS, Kubernetes manifests, GitHub Actions workflows).
 
-        Be constructive and helpful in your feedback.
+        Review only what's in the diff. Be direct and specific — include file and line
+        for every finding. Skip praise, summaries, and style nitpicks. Do not invent issues.
+
+        Check for:
+        1. **Bugs** — wrong resource refs/interpolations, count/for_each errors, missing
+           depends_on, broken module inputs/outputs
+        2. **Security** — overly permissive IAM (wildcard actions/resources/principals),
+           open ingress (0.0.0.0/0), unencrypted or public storage, plaintext secrets
+        3. **State & blast radius** — changes that force replace or destroy/recreate,
+           drift risks, missing lifecycle guards on shared/stateful resources
+        4. **Cost** — sizing, always-on resources, NAT/data-transfer, anything that
+           materially moves spend
+        5. **IaC conventions** — Terraform/Terragrunt best practices, pinned
+           provider/module versions, consistent resource naming
+
+        Format each finding as a single line, severity first:
+        🔴 **Critical** / 🟠 **High** / 🟡 **Medium** `path/to/file:line` — what's wrong and why it matters
+
+        🔴/🟠 are blocking; 🟡 is non-blocking. If the PR is clean, say so in one sentence.
       claude_args: '--allowedTools "Bash(terraform validate),Bash(terraform plan),Bash(terraform fmt),Bash(terragrunt validate),Bash(terragrunt plan),Bash(terragrunt hclfmt),Bash(git status),Bash(git diff)"'
       timeout_minutes: 15
       runner: ubuntu-latest
@@ -85,5 +106,3 @@ jobs:
       # skip_automatic_when_mentioned: false  # Optional: allow automatic mode even with @claude mention
       # custom_trigger_condition: |     # Optional: Custom logic for infrastructure changes
       #   github.event_name == 'pull_request' && contains(github.event.pull_request.body, 'terraform')
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
