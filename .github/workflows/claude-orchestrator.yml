@@ -9,8 +9,9 @@
 #   - Any other model_id (us.amazon.*, meta.*, mistral.*, cohere.*, ai21.*, ...)
 #       -> bedrock-generic-executor.yml (Bedrock Converse API + sticky comments)
 #
-# Exactly one executor runs per call — the route job emits a provider output
-# and each executor job gates on it.
+# model_id accepts a comma-separated list; each model reviews the PR independently.
+# The route job sorts the models into one JSON list per executor, and each executor
+# job fans out over its list via strategy.matrix (skipped when its list is empty).
 #
 # ARCHITECTURE: Consumer repositories handle their own webhook events and
 # conditional logic, then call this workflow with the appropriate trigger
@@ -63,7 +64,7 @@ on:
         type: string
       # --- Multi-model inputs (v3) ---
       model_id:
-        description: 'Bedrock model ID, inference-profile form (e.g. global.anthropic.claude-sonnet-4-6, us.amazon.nova-pro-v1:0). Empty = direct Anthropic API.'
+        description: 'One or more Bedrock model IDs, comma-separated, inference-profile form (e.g. "global.anthropic.claude-sonnet-4-6, us.amazon.nova-pro-v1:0"). Each model reviews the PR independently. Empty = direct Anthropic API. With multiple models, leave sticky_namespace empty so each model keeps its own comment (markers key on model_id).'
         required: false
         type: string
         default: ''
@@ -172,7 +173,12 @@ jobs:
       )
     runs-on: ubuntu-latest
     outputs:
-      provider: ${{ steps.detect.outputs.provider }}
+      # One JSON array per executor — each entry is a model that routes there.
+      # An executor job runs once per entry via strategy.matrix (or is skipped when '[]').
+      anthropic: ${{ steps.detect.outputs.anthropic }}
+      generic: ${{ steps.detect.outputs.generic }}
+      harness: ${{ steps.detect.outputs.harness }}
+      codex: ${{ steps.detect.outputs.codex }}
     steps:
       - id: detect
         env:
@@ -180,44 +186,62 @@ jobs:
           BEDROCK_ROLE_ARN: ${{ inputs.bedrock_role_arn }}
           AGENTIC: ${{ inputs.agentic }}
         run: |
-          set -euo pipefail
-          if [ -z "${MODEL_ID}" ]; then
-            # No model specified → direct Anthropic API. Bedrock role not required.
-            PROVIDER="anthropic-api"
-          # Anchored match: bare anthropic.* or inference-profile-prefixed
-          # <region>.anthropic.* (us.anthropic.*, global.anthropic.*, eu.anthropic.*).
-          # Avoids false matches on third-party model IDs that contain "anthropic." as substring.
-          elif [[ "${MODEL_ID}" =~ ^([a-z]+\.)?anthropic\. ]]; then
-            PROVIDER="anthropic-bedrock"
-          # OpenAI GPT/Codex (openai.gpt-5.5, openai.gpt-5.4). Served only by bedrock-mantle
-          # (OpenAI Responses API), not bedrock-runtime — routed to the codex executor.
-          # Anchored like the anthropic match so "openai." as a substring can't misroute.
-          elif [[ "${MODEL_ID}" =~ ^([a-z]+\.)?openai\. ]]; then
-            PROVIDER="openai-mantle"
-          else
-            PROVIDER="bedrock-generic"
-          fi
+          python3 - <<'PY'
+          import json, os, re, sys
 
-          # The agentic harness is an opt-in upgrade of the generic Converse path only: same
-          # cheap model, but it can read the repo via tools, post inline comments, and gate on
-          # severity. Anthropic (already agentic) and OpenAI/Codex paths ignore the flag.
-          if [ "${PROVIDER}" = "bedrock-generic" ] && [ "${AGENTIC}" = "true" ]; then
-            PROVIDER="bedrock-harness"
-          fi
+          raw = os.environ.get("MODEL_ID", "")
+          role = os.environ.get("BEDROCK_ROLE_ARN", "")
+          agentic = os.environ.get("AGENTIC", "") == "true"
 
-          # Validate bedrock_role_arn is present whenever we route to a Bedrock path.
-          if [ "${PROVIDER}" != "anthropic-api" ] && [ -z "${BEDROCK_ROLE_ARN}" ]; then
-            echo "::error::model_id=${MODEL_ID} requires bedrock_role_arn input"
-            exit 1
-          fi
+          # Split the comma-separated list; drop blanks. Empty list = single direct Anthropic API run.
+          models = [m.strip() for m in raw.split(",") if m.strip()]
+          if not models:
+              models = [""]
 
-          echo "Resolved provider: ${PROVIDER}"
-          echo "provider=${PROVIDER}" >> "$GITHUB_OUTPUT"
+          anthropic, generic, harness, codex = [], [], [], []
+          for m in models:
+              if m == "":
+                  # No model → direct Anthropic API. Bedrock role not required.
+                  anthropic.append({"model_id": "", "provider": "anthropic-api"})
+              # Anchored match: bare anthropic.* or inference-profile-prefixed <region>.anthropic.*
+              # (us./global./eu.). Avoids false matches on IDs that merely contain "anthropic.".
+              elif re.match(r"^([a-z]+\.)?anthropic\.", m):
+                  anthropic.append({"model_id": m, "provider": "anthropic-bedrock"})
+              # OpenAI GPT/Codex — served only by bedrock-mantle, routed to the codex executor.
+              elif re.match(r"^([a-z]+\.)?openai\.", m):
+                  codex.append(m)
+              # Everything else → generic Bedrock Converse, or its agentic harness upgrade.
+              elif agentic:
+                  harness.append(m)
+              else:
+                  generic.append(m)
+
+          # bedrock_role_arn is required if any model routes to a Bedrock path.
+          needs_role = bool(generic or harness or codex
+                            or any(e["provider"] == "anthropic-bedrock" for e in anthropic))
+          if needs_role and not role:
+              print("::error::one or more model_id values require bedrock_role_arn input", file=sys.stderr)
+              sys.exit(1)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"anthropic={json.dumps(anthropic)}\n")
+              f.write(f"generic={json.dumps(generic)}\n")
+              f.write(f"harness={json.dumps(harness)}\n")
+              f.write(f"codex={json.dumps(codex)}\n")
+
+          print("Routing:",
+                "anthropic", anthropic, "| generic", generic,
+                "| harness", harness, "| codex", codex)
+          PY
 
   claude-anthropic:
     needs: route
-    # Fires for anthropic-api OR anthropic-bedrock. When route is skipped, this is too.
-    if: needs.route.outputs.provider == 'anthropic-api' || needs.route.outputs.provider == 'anthropic-bedrock'
+    # One run per anthropic model (anthropic-api and/or anthropic-bedrock). Skipped when none.
+    if: needs.route.outputs.anthropic != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJSON(needs.route.outputs.anthropic) }}
     uses: ./.github/workflows/claude-executor.yml
     with:
       trigger_mode: ${{ inputs.trigger_mode }}
@@ -225,8 +249,8 @@ jobs:
       claude_args: ${{ inputs.claude_args }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}
-      provider: ${{ needs.route.outputs.provider }}
-      model_id: ${{ inputs.model_id }}
+      provider: ${{ matrix.entry.provider }}
+      model_id: ${{ matrix.entry.model_id }}
       bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
       aws_region: ${{ inputs.aws_region }}
       use_sticky_comment: ${{ inputs.use_sticky_comment }}
@@ -235,10 +259,14 @@ jobs:
 
   bedrock-generic:
     needs: route
-    if: needs.route.outputs.provider == 'bedrock-generic'
+    if: needs.route.outputs.generic != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        model_id: ${{ fromJSON(needs.route.outputs.generic) }}
     uses: ./.github/workflows/bedrock-generic-executor.yml
     with:
-      model_id: ${{ inputs.model_id }}
+      model_id: ${{ matrix.model_id }}
       bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
       aws_region: ${{ inputs.aws_region }}
       prompt: ${{ inputs.prompt }}
@@ -250,10 +278,14 @@ jobs:
 
   bedrock-harness:
     needs: route
-    if: needs.route.outputs.provider == 'bedrock-harness'
+    if: needs.route.outputs.harness != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        model_id: ${{ fromJSON(needs.route.outputs.harness) }}
     uses: ./.github/workflows/bedrock-harness-executor.yml
     with:
-      model_id: ${{ inputs.model_id }}
+      model_id: ${{ matrix.model_id }}
       bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
       aws_region: ${{ inputs.aws_region }}
       prompt: ${{ inputs.prompt }}
@@ -267,10 +299,14 @@ jobs:
 
   codex-mantle:
     needs: route
-    if: needs.route.outputs.provider == 'openai-mantle'
+    if: needs.route.outputs.codex != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        model_id: ${{ fromJSON(needs.route.outputs.codex) }}
     uses: ./.github/workflows/codex-executor.yml
     with:
-      model_id: ${{ inputs.model_id }}
+      model_id: ${{ matrix.model_id }}
       bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
       # aws_region defaults to us-east-1, where GPT-5.5/5.4 are served (also us-east-2;
       # GPT-5.4 also us-west-2). Consumers only set model_id.
