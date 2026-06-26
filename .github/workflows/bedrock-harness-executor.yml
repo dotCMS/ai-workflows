@@ -442,7 +442,11 @@ jobs:
           # single huge context, and coverage is systematic rather than loop-dependent.
           FILE_CAP = 40       # max files reviewed (logged if exceeded — no silent truncation)
           CAND_CAP = 12       # max candidates carried into verification
-          VERIFY_ITERS = 3    # read-only tool calls allowed per candidate
+          VERIFY_ITERS = 2    # read-only tool calls allowed per verified candidate
+          STAGE1_BATCH_CHARS = 45000   # batch files into one Stage-1 call up to this size
+          CONF_MIN = 0.3      # drop Stage-1 candidates below this confidence outright
+          CONF_CONFIRM = 0.7  # Medium/Low: confidence >= this counts as confirmed (no tool verify)
+          VERIFY_SEVERITIES = {"critical", "high"}  # only these get the tool-backed verify loop
 
           segments = []
           for seg in re.split(r"(?m)^(?=diff --git )", pr_diff):
@@ -494,27 +498,59 @@ jobs:
                       kept[hit] = f
               return kept
 
-          # ---- Stage 1: per-file candidate findings (no tools, forced JSON) -------------
+          # ---- Stage 1: candidate findings, BATCHED (no tools, forced JSON) -------------
+          # Partition the diff into size-bounded batches instead of one call PER file: a normal PR
+          # fits in ONE call, only a large diff splits into a few — same coverage (every file's
+          # diff is still sent), far fewer model calls. Each candidate is tagged with its file.
+          def _batches(segs):
+              batch, size = [], 0
+              for path, seg in segs:
+                  s = seg[:20000]
+                  if batch and size + len(s) > STAGE1_BATCH_CHARS:
+                      yield batch
+                      batch, size = [], 0
+                  batch.append((path, s))
+                  size += len(s)
+              if batch:
+                  yield batch
+
+          sys1 = (
+              review_rules
+              + "\n\nYou are scanning the diffs of one or more files for likely bug, security, or "
+              + "correctness issues. Output ONLY a JSON array of candidates: "
+              + '[{"file":"<exact path from a `File:` header below>","severity":"Critical|High|Medium|Low",'
+              + '"line":<int in the new file>,"title":"...","hypothesis":"what may be wrong",'
+              + '"confidence":<float 0.0-1.0, how sure you are it is a real bug>}]. '
+              + "Set `file` to the path of the `File:` section the issue is in. Be generous — these are "
+              + "candidates that get verified next. Empty array [] if nothing." + prior_block + SECURITY
+          )
+
+          def _conf(c):
+              try:
+                  return float(c.get("confidence", 0.5))
+              except (TypeError, ValueError):
+                  return 0.5
+
           candidates = []
-          for path, seg in segments:
-              sys1 = (
-                  review_rules
-                  + "\n\nYou are scanning ONE file's diff for likely bug, security, or correctness issues. "
-                  + "Output ONLY a JSON array of candidates: "
-                  + '[{"severity":"Critical|High|Medium|Low","line":<int in the new file>,"title":"...","hypothesis":"what may be wrong"}]. '
-                  + "Be generous — these are candidates that get verified next. Empty array [] if nothing."
-                  + prior_block + SECURITY
-              )
-              arr = ask_json(sys1, f"File: {path}\n\nDiff (DATA):\n{seg[:20000]}" + PR_CTX, "array") or []
+          for nb, batch in enumerate(_batches(segments), 1):
+              paths = [p for p, _ in batch]
+              body = "\n\n".join(f"File: {p}\n\nDiff (DATA):\n{s}" for p, s in batch)
+              arr = ask_json(sys1, body + PR_CTX, "array") or []
               n = 0
               if isinstance(arr, list):
                   for c in arr:
-                      if isinstance(c, dict):
-                          c["file"] = path
-                          candidates.append(c)
-                          n += 1
-              print(f"stage1 {path}: {n} candidate(s)", file=sys.stderr)
+                      if not isinstance(c, dict):
+                          continue
+                      f = str(c.get("file", "")).strip()
+                      if f not in paths:  # model garbled/omitted file: safe only if batch is 1 file
+                          f = paths[0] if len(paths) == 1 else (f or "(unknown)")
+                      c["file"] = f
+                      candidates.append(c)
+                      n += 1
+              print(f"stage1 batch {nb} ({len(batch)} file(s)): {n} candidate(s)", file=sys.stderr)
 
+          # Item 3: drop low-confidence candidates before any verify (cheap calibration).
+          candidates = [c for c in candidates if _conf(c) >= CONF_MIN]
           candidates = dedupe(candidates)  # collapse the same issue raised from multiple files
           candidates.sort(key=lambda c: SEV_RANK.get(str(c.get("severity", "")).lower(), 4))
           dropped_cands = max(0, len(candidates) - CAND_CAP)
@@ -569,21 +605,30 @@ jobs:
                   return _slice_json(converse(msgs, sysV), "object")
               return None
 
+          # Item 2: GATE the expensive verify. Only Critical/High (the severities that fail the
+          # merge check) get the tool-backed verify loop — they MUST be evidence-checked. Medium/
+          # Low are advisory, so they skip the model call entirely and are decided by Stage-1
+          # confidence. On a normal PR this turns ~60-90 calls into a handful.
           norm = []
           for cand in candidates:
-              v = verify(cand)
-              if not isinstance(v, dict):
-                  continue
-              verdict = str(v.get("verdict", "")).lower()
-              # Drop ONLY positively-disproven candidates. "uncertain" (couldn't confirm OR
-              # disprove) is KEPT as advisory — this is the calibration fix: a refute requires
-              # positive disproof, so cautious models no longer nuke their own real findings.
-              if verdict == "refuted":
-                  continue
-              confirmed = verdict == "confirmed"
+              if str(cand.get("severity", "")).lower() in VERIFY_SEVERITIES:
+                  v = verify(cand)
+                  if not isinstance(v, dict):
+                      v = {"verdict": "uncertain"}  # don't silently drop a Critical/High
+                  verdict = str(v.get("verdict", "")).lower()
+                  # Drop ONLY positively-disproven candidates; "uncertain" stays advisory (a refute
+                  # requires positive disproof, so cautious models don't nuke their own real bugs).
+                  if verdict == "refuted":
+                      continue
+                  confirmed = verdict == "confirmed"
+                  vtitle, vdesc, vline, vsev = v.get("title"), v.get("description"), v.get("line"), v.get("severity")
+              else:
+                  # Medium/Low: no tool call — Stage-1 confidence decides confirmed vs advisory.
+                  confirmed = _conf(cand) >= CONF_CONFIRM
+                  vtitle = vdesc = vline = vsev = None
               file = str(cand.get("file", "")).strip()
-              line = v.get("line", cand.get("line"))
-              sev = str(v.get("severity") or cand.get("severity") or "").strip()
+              line = vline if vline is not None else cand.get("line")
+              sev = str(vsev or cand.get("severity") or "").strip()
               norm.append({
                   "severity": sev,
                   "file": file,
@@ -592,8 +637,8 @@ jobs:
                   # Neutralize "-->" so a model-written title/description can't terminate the
                   # HTML <!-- dotcms-review-findings:… --> marker (would corrupt the comment AND
                   # break carry-forward parsing). Self-review caught this.
-                  "title": str(v.get("title") or cand.get("title", "")).strip().replace("-->", "-- >"),
-                  "description": str(v.get("description", "")).strip().replace("-->", "-- >"),
+                  "title": str(vtitle or cand.get("title", "")).strip().replace("-->", "-- >"),
+                  "description": str(vdesc or cand.get("hypothesis", "")).strip().replace("-->", "-- >"),
                   "confirmed": confirmed,
               })
           norm = dedupe(norm)  # final collapse — verify can re-confirm one root cause from 2 candidates
