@@ -535,18 +535,30 @@ jobs:
               except (TypeError, ValueError):
                   return 0.5
 
-          # Reasoning models paraphrase the schema keys (issue/description/reason/… instead of
-          # title/hypothesis), which used to make _usable() silently drop every candidate. Map
-          # the common aliases back onto the canonical keys at ingestion so paraphrased findings
-          # survive and render.
-          TITLE_ALIASES = ("title", "issue", "summary", "name", "problem", "finding", "message")
-          HYPO_ALIASES = ("hypothesis", "description", "reason", "detail", "details",
+          # Reasoning models paraphrase the schema keys, which used to make _usable() silently
+          # drop every candidate. In particular they often echo the carry-forward findings schema
+          # (sev/loc/desc) seen in the prompt instead of the stage-1 schema (severity/line/title/
+          # hypothesis). Map the common aliases back onto the canonical keys at ingestion so
+          # paraphrased findings survive and render.
+          TITLE_ALIASES = ("title", "issue", "summary", "name", "problem", "finding", "message", "desc")
+          HYPO_ALIASES = ("hypothesis", "description", "desc", "reason", "detail", "details",
                           "explanation", "rationale", "why")
+          SEV_WORDS = ("critical", "high", "medium", "low")
 
           def _usable(c):
               return bool(str(c.get("title", "")).strip() or str(c.get("hypothesis", "")).strip())
 
           def _norm_keys(c):
+              # sev ("🔴 Critical") -> severity ("Critical"); the gate/rank downstream lowercase it.
+              if not str(c.get("severity", "")).strip() and c.get("sev"):
+                  m = [w for w in SEV_WORDS if w in str(c.get("sev")).lower()]
+                  if m:
+                      c["severity"] = m[0].capitalize()
+              # loc ("path/File.java:597") -> line (int) when no explicit line was given.
+              if c.get("line") in (None, "") and c.get("loc"):
+                  mt = re.search(r":(\d+)\s*$", str(c.get("loc")))
+                  if mt:
+                      c["line"] = int(mt.group(1))
               if not str(c.get("title", "")).strip():
                   for k in TITLE_ALIASES:
                       if str(c.get(k, "")).strip():
