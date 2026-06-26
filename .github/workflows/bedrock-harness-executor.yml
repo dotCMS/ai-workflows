@@ -226,18 +226,19 @@ jobs:
           REPO_DIR = os.path.realpath(os.environ.get("GITHUB_WORKSPACE") or ".")
           MODEL = os.environ["MODEL_ID"]
           REGION = os.environ["AWS_REGION"]
-          MAX_OUT = int(os.environ.get("MAX_OUTPUT_TOKENS") or "8000")
-          # Per-turn budget. The harness emits only SMALL structured output each turn (a candidate
-          # array, or a one-line verdict), but reasoning models count THINKING against this budget —
-          # so a big single-shot value (e.g. the orchestrator's 32k default, sized for ONE large
-          # review) makes every one of the ~60-90 micro-calls over-think, ballooning wall-clock on
-          # slow models (Opus/DeepSeek) for zero output-quality gain. Clamp to a per-turn ceiling
-          # with ample reasoning headroom. Override via max_output_tokens if a model truncates.
-          HARNESS_TURN_CAP = 12000
-          if MAX_OUT > HARNESS_TURN_CAP:
-              print(f"::notice::clamping per-turn max_output_tokens {MAX_OUT} -> {HARNESS_TURN_CAP} "
-                    f"(harness emits small per-turn output; reasoning still has headroom)", file=sys.stderr)
-              MAX_OUT = HARNESS_TURN_CAP
+          MAX_OUT_RAW = int(os.environ.get("MAX_OUTPUT_TOKENS") or "8000")
+          # Per-stage output budgets. Reasoning models (DeepSeek-R1, Opus) count THINKING against
+          # the output budget, so the two stages need DIFFERENT ceilings:
+          #   * Stage 1 (batched) scans many files at once and must emit a multi-file candidate
+          #     array — a tight cap makes a reasoning model spend the budget thinking and emit
+          #     truncated/empty JSON (DeepSeek did exactly this on the 18-file batch). Give it room.
+          #   * Verify emits a one-line verdict, so a small cap is plenty AND keeps the few verify
+          #     turns fast.
+          # (Before batching, the harness made ~60-90 micro-calls and a high cap made each over-
+          # think; now there are only a handful of calls, so a generous Stage-1 budget is cheap.)
+          STAGE1_MAX_OUT = min(max(MAX_OUT_RAW, 16000), 24000)
+          VERIFY_MAX_OUT = min(MAX_OUT_RAW, 12000)
+          MAX_OUT = STAGE1_MAX_OUT  # default for converse()/ask_json(); verify passes VERIFY_MAX_OUT
           MAX_ITERS = int(os.environ.get("MAX_ITERATIONS") or "8")
           TOOL_RESULT_CAP = 12000  # chars per tool result, to bound token growth
 
@@ -549,8 +550,12 @@ jobs:
                       n += 1
               print(f"stage1 batch {nb} ({len(batch)} file(s)): {n} candidate(s)", file=sys.stderr)
 
-          # Item 3: drop low-confidence candidates before any verify (cheap calibration).
-          candidates = [c for c in candidates if _conf(c) >= CONF_MIN]
+          # Drop degenerate candidates (no title AND no hypothesis) so a model that emits
+          # placeholder/truncated objects never yields blank "(unknown)" findings; then drop
+          # low-confidence ones (item 3 calibration).
+          def _usable(c):
+              return bool(str(c.get("title", "")).strip() or str(c.get("hypothesis", "")).strip())
+          candidates = [c for c in candidates if _usable(c) and _conf(c) >= CONF_MIN]
           candidates = dedupe(candidates)  # collapse the same issue raised from multiple files
           candidates.sort(key=lambda c: SEV_RANK.get(str(c.get("severity", "")).lower(), 4))
           dropped_cands = max(0, len(candidates) - CAND_CAP)
@@ -583,7 +588,7 @@ jobs:
                   f"Suspected {cand.get('severity','?')} issue in {cand.get('file')} near line "
                   f"{cand.get('line')}: {cand.get('title','')} — {cand.get('hypothesis','')}" + PR_CTX}]}]
               for i in range(VERIFY_ITERS + 1):
-                  text = converse(msgs, sysV)
+                  text = converse(msgs, sysV, VERIFY_MAX_OUT)
                   obj = _slice_json(text, "object")
                   if isinstance(obj, dict) and "verdict" in obj:
                       return obj
@@ -602,7 +607,7 @@ jobs:
                   msgs.append({"role": "assistant", "content": [{"text": text}]})
                   msgs.append({"role": "user", "content": [{"text":
                       "Output ONLY the verdict JSON object now — no tools, no prose."}]})
-                  return _slice_json(converse(msgs, sysV), "object")
+                  return _slice_json(converse(msgs, sysV, VERIFY_MAX_OUT), "object")
               return None
 
           # Item 2: GATE the expensive verify. Only Critical/High (the severities that fail the
