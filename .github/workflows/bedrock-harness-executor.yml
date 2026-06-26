@@ -439,9 +439,14 @@ jobs:
           # single huge context, and coverage is systematic rather than loop-dependent.
           FILE_CAP = 40       # max files reviewed (logged if exceeded — no silent truncation)
           CAND_CAP = 12       # max candidates carried into verification
-          VERIFY_ITERS = 2    # read-only tool calls allowed per verified candidate
-          CONF_CONFIRM = 0.7  # Medium/Low: confidence >= this counts as confirmed (no tool verify)
-          VERIFY_SEVERITIES = {"critical", "high"}  # only these get the tool-backed verify loop
+          VERIFY_ITERS = 5    # read-only tool calls per verified candidate — enough to grep ->
+                              # locate a class/file -> read it -> conclude (2 was too few: the
+                              # model guessed a path, missed, and gave up with "source not found")
+          CONF_CONFIRM = 0.7  # Low only: confidence >= this counts as confirmed (no tool verify)
+          # Tool-verify everything EXCEPT Low nits — grounding findings in the repo is the whole
+          # point of the agentic harness. Gating to Critical/High left Medium findings (the bulk)
+          # as pure diff speculation ("may not", "some DB engines"), which reads as ungrounded.
+          VERIFY_SEVERITIES = {"critical", "high", "medium"}
 
           segments = []
           for seg in re.split(r"(?m)^(?=diff --git )", pr_diff):
@@ -553,7 +558,9 @@ jobs:
                   + '<action>{"tool":"read_file","args":{"path":"dir/File.java","start_line":40,"end_line":90}}</action>\n'
                   + '<action>{"tool":"list_dir","args":{"path":"dir"}}</action>\n'
                   + "Tools are READ-ONLY and confined to the repository (grep = fast tracked-file search; "
-                  + "read_file returns numbered lines; list_dir lists a directory). When decided, "
+                  + "read_file returns numbered lines; list_dir lists a directory). To inspect a symbol "
+                  + "defined elsewhere (a util, API, or class like DotConnect), DON'T guess its path — grep "
+                  + "for its name first to find the file, then read_file that file. When decided, "
                   + "reply with ONLY this JSON object and nothing else:\n"
                   + '{"verdict":"confirmed|refuted|uncertain","severity":"Critical|High|Medium|Low","line":<int>,'
                   + '"title":"...","description":"the issue and the evidence for your verdict"}\n'
