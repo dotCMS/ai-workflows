@@ -440,7 +440,6 @@ jobs:
           FILE_CAP = 40       # max files reviewed (logged if exceeded — no silent truncation)
           CAND_CAP = 12       # max candidates carried into verification
           VERIFY_ITERS = 2    # read-only tool calls allowed per verified candidate
-          CONF_MIN = 0.3      # drop Stage-1 candidates below this confidence outright
           CONF_CONFIRM = 0.7  # Medium/Low: confidence >= this counts as confirmed (no tool verify)
           VERIFY_SEVERITIES = {"critical", "high"}  # only these get the tool-backed verify loop
 
@@ -528,12 +527,15 @@ jobs:
                           n += 1
               print(f"stage1 {path}: {n} candidate(s)", file=sys.stderr)
 
-          # Drop degenerate candidates (no title AND no hypothesis) so a model that emits
-          # placeholder/truncated objects never yields blank "(unknown)" findings; then drop
-          # low-confidence ones (item 3 calibration).
+          # Drop ONLY degenerate candidates (no title AND no hypothesis) so a model that emits
+          # placeholder/truncated objects never yields blank "(unknown)" findings. Do NOT hard-drop
+          # on the model's self-reported confidence: it's wildly model-dependent — qwen rated 38
+          # real candidates all below 0.3 and the old `>= CONF_MIN` filter silently nuked every one
+          # (0 findings on a PR with real bugs). Volume is bounded by dedup + CAND_CAP + verify-
+          # gating instead; confidence is still used only to LABEL Medium/Low confirmed-vs-advisory.
           def _usable(c):
               return bool(str(c.get("title", "")).strip() or str(c.get("hypothesis", "")).strip())
-          candidates = [c for c in candidates if _usable(c) and _conf(c) >= CONF_MIN]
+          candidates = [c for c in candidates if _usable(c)]
           candidates = dedupe(candidates)  # collapse the same issue raised from multiple files
           candidates.sort(key=lambda c: SEV_RANK.get(str(c.get("severity", "")).lower(), 4))
           dropped_cands = max(0, len(candidates) - CAND_CAP)
