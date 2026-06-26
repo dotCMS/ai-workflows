@@ -100,10 +100,15 @@ on:
         type: number
         default: 80000
       max_output_tokens:
-        description: 'Total output-token budget for the Responses API call — covers BOTH reasoning tokens AND the visible answer. Reasoning models spend this on thinking first, so it must be large enough that the answer still fits after reasoning, or the response comes back status=incomplete with no visible text. Default 8000 gives medium-effort GPT-5.x comfortable headroom.'
+        description: 'Total output-token budget for the Responses API call — covers BOTH reasoning tokens AND the visible answer. Reasoning models spend this on thinking first, so it must be large enough that the answer still fits after reasoning, or the response comes back status=incomplete with no visible text. Default 32000 gives high-effort GPT-5.x comfortable headroom on large diffs.'
         required: false
         type: number
-        default: 8000
+        default: 32000
+      model_prices:
+        description: 'Optional JSON overriding the built-in per-model price table (USD per 1M tokens) for the estimated-cost footer. e.g. {"openai.gpt-5.5":{"in":1.25,"out":10.0}}. Unknown models omit the cost.'
+        required: false
+        type: string
+        default: ''
       reasoning_effort:
         description: 'Reasoning effort for GPT-5.x: minimal | low | medium | high. Higher = better review, more reasoning tokens + latency.'
         required: false
@@ -138,6 +143,7 @@ jobs:
       MAX_DIFF_CHARS: ${{ inputs.max_diff_chars }}
       MAX_OUTPUT_TOKENS: ${{ inputs.max_output_tokens }}
       REASONING_EFFORT: ${{ inputs.reasoning_effort }}
+      MODEL_PRICES: ${{ inputs.model_prices }}
       # Default uses the model id so different models naturally get different stickies.
       # In non-sticky mode the marker carries the head SHA, so a re-run on the same
       # commit updates its comment in place (in-progress -> final, no orphan) while a
@@ -222,7 +228,7 @@ jobs:
           # SDK with a SHORT-TERM Bedrock bearer token minted from the assumed-role session.
           # Dependencies are declared above as PEP 723 inline metadata; `uv run` provisions
           # them (and Python) into an ephemeral, cached environment — no system pip install.
-          import os, sys
+          import json, os, sys
           from aws_bedrock_token_generator import provide_token
           from openai import OpenAI
 
@@ -300,7 +306,18 @@ jobs:
               for event in stream:
                   etype = getattr(event, "type", "")
                   if etype == "response.output_text.delta":
-                      parts.append(event.delta)
+                      # Most servers stream INCREMENTAL deltas; bedrock-mantle (esp. GPT-5.x) has
+                      # been observed to stream CUMULATIVE snapshots — each delta is the full text
+                      # so far. Blindly appending then duplicates the review (A, AB, ABC -> AABABC)
+                      # and mangles the trailing findings marker. Detect the cumulative case (the
+                      # delta starts with everything accumulated) and replace instead of append;
+                      # otherwise append. Handles both servers with no per-model config.
+                      d = event.delta or ""
+                      acc = "".join(parts)
+                      if acc and d.startswith(acc):
+                          parts = [d]
+                      else:
+                          parts.append(d)
                   elif etype in ("response.completed", "response.incomplete", "response.failed"):
                       final = getattr(event, "response", None)
                       if etype != "response.completed":
@@ -364,6 +381,33 @@ jobs:
               trunc_note = (f"\n\n> ⚠️ _Review truncated — the model hit its output-token budget "
                             f"(`{reason}`); findings above may be incomplete._\n")
 
+          # The model is asked to end its review with one machine-readable
+          # <!-- dotcms-review-findings:[...] --> marker. Don't trust it to be singular or
+          # well-formed: keep only the prose before the FIRST marker, and have the executor
+          # re-emit exactly ONE marker built from the LAST array that actually parses as JSON
+          # (mirrors the bedrock harness, which owns its own marker). Guarantees a clean body
+          # and valid carry-forward JSON even if the model duplicates or corrupts the marker.
+          def split_marker(text):
+              head = text.split("<!-- dotcms-review-findings:", 1)[0].rstrip()
+              fjson = "[]"
+              i = text.rfind("dotcms-review-findings:")
+              if i != -1:
+                  seg = text[i + len("dotcms-review-findings:"):].split("-->", 1)[0]
+                  l, r = seg.find("["), seg.rfind("]")
+                  if 0 <= l < r:
+                      try:
+                          json.loads(seg[l:r + 1])
+                          fjson = seg[l:r + 1]
+                      except ValueError:
+                          pass
+              return head, fjson
+
+          findings_json = "[]"
+          if review:
+              review, findings_json = split_marker(review)
+          with open("/tmp/findings.json", "w", encoding="utf-8") as f:
+              f.write(findings_json)
+
           with open("/tmp/review.md", "w", encoding="utf-8") as f:
               if review:
                   f.write(review + trunc_note)
@@ -409,8 +453,31 @@ jobs:
           ot = _g(usage, "output_tokens")
           tt = _g(usage, "total_tokens")
           rt = _g(_g(usage, "output_tokens_details", None), "reasoning_tokens")
+          # Estimated run cost (USD per 1M tokens; APPROXIMATE — verify vs AWS/mantle pricing,
+          # override via the model_prices input). Unknown model => cost omitted, never guessed.
+          PRICES = {
+              "us.anthropic.claude-opus-4-8": (15.0, 75.0),
+              "us.deepseek.r1-v1:0":          (1.35, 5.40),
+              "qwen.qwen3-next-80b-a3b":      (0.40, 1.60),
+              "zai.glm-5":                    (0.60, 2.20),
+              "openai.gpt-5.5":               (1.25, 10.0),
+          }
+          _raw_prices = os.environ.get("MODEL_PRICES", "").strip()
+          if _raw_prices:
+              try:
+                  for _k, _v in (json.loads(_raw_prices) or {}).items():
+                      if isinstance(_v, dict) and "in" in _v and "out" in _v:
+                          PRICES[_k] = (float(_v["in"]), float(_v["out"]))
+                      elif isinstance(_v, (list, tuple)) and len(_v) == 2:
+                          PRICES[_k] = (float(_v[0]), float(_v[1]))
+              except Exception as _e:  # noqa: BLE001
+                  print(f"::warning::model_prices ignored (bad JSON): {_e}", file=sys.stderr)
+          _pr = PRICES.get(model)
+          _cost = ""
+          if _pr and isinstance(it, int) and isinstance(ot, int):
+              _cost = f" · est. ~${it / 1e6 * _pr[0] + ot / 1e6 * _pr[1]:.3f}"
           with open("/tmp/usage.txt", "w", encoding="utf-8") as f:
-              f.write(f"in: {it} · out: {ot} (reasoning: {rt}) · total: {tt}")
+              f.write(f"in: {it} · out: {ot} (reasoning: {rt}) · total: {tt}{_cost}")
           print("Tokens:", open("/tmp/usage.txt", encoding="utf-8").read())
 
           # Exit 0 whenever we have a terminal response to diagnose (incomplete / failed / empty):
@@ -460,8 +527,8 @@ jobs:
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "🔄 **Codex review in progress** — model: \`%s\`\n\n" "${MODEL_ID}"
-            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+            printf "### 🔄 dotBot Review (Bedrock Mantle) — in progress\n\n"
+            printf "<sub>**%s** · Run: [#%s](%s)</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
 
@@ -528,19 +595,22 @@ jobs:
           USAGE=$(cat /tmp/usage.txt)
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           # Put the outcome in the HEADER so a human sees the status without reading the body.
+          # Same "dotBot Review" branding + h3 header + bold-model footer as the bedrock harness,
+          # with "(Codex)" marking the path.
           case "${OUTCOME:-ok}" in
-            truncated)        HEADER="## ⚠️ Codex Review — truncated (partial; hit output-token budget)" ;;
-            incomplete-empty) HEADER="## ❌ Codex Review — no output (reasoning exhausted the token budget)" ;;
-            failed)           HEADER="## ❌ Codex Review — model service error" ;;
-            error)            HEADER="## ❌ Codex Review — no output" ;;
-            *)                HEADER="## 🤖 Codex Review" ;;
+            truncated)        HEADER="### ⚠️ dotBot Review (Bedrock Mantle) — truncated (partial; hit output-token budget)" ;;
+            incomplete-empty) HEADER="### ❌ dotBot Review (Bedrock Mantle) — no output (reasoning exhausted the token budget)" ;;
+            failed)           HEADER="### ❌ dotBot Review (Bedrock Mantle) — model service error" ;;
+            error)            HEADER="### ❌ dotBot Review (Bedrock Mantle) — no output" ;;
+            *)                HEADER="### 🤖 dotBot Review (Bedrock Mantle)" ;;
           esac
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "%s — \`%s\`\n\n" "${HEADER}" "${MODEL_ID}"
+            printf "%s\n\n" "${HEADER}"
             cat /tmp/review.md
-            printf "\n\n---\n"
-            printf "<sub>Run: [#%s](%s) · tokens: %s</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}" "${USAGE}"
+            printf "\n\n<!-- dotcms-review-findings:%s -->\n" "$(cat /tmp/findings.json 2>/dev/null || echo '[]')"
+            printf "\n---\n"
+            printf "<sub>**%s** · Run: [#%s](%s) · tokens: %s</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}" "${USAGE}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
 
@@ -567,9 +637,9 @@ jobs:
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "## ❌ Codex Review failed — \`%s\`\n\n" "${MODEL_ID}"
+            printf "### ❌ dotBot Review (Bedrock Mantle) — failed\n\n"
             printf "The review job failed before producing output. See the run for details.\n\n"
-            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+            printf "<sub>**%s** · Run: [#%s](%s)</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
 
@@ -588,8 +658,8 @@ jobs:
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "## ⏱️ Codex Review canceled — \`%s\`\n\n" "${MODEL_ID}"
+            printf "### ⏱️ dotBot Review (Bedrock Mantle) — canceled\n\n"
             printf "The review run was canceled before completing — superseded by a newer push, or it timed out.\n\n"
-            printf "<sub>Run: [#%s](%s)</sub>\n" "${GITHUB_RUN_ID}" "${RUN_LINK}"
+            printf "<sub>**%s** · Run: [#%s](%s)</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
