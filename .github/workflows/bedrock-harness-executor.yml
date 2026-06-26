@@ -406,21 +406,36 @@ jobs:
 
           ACTION_RE = re.compile(r"<action>\s*(\{.*?\})\s*</action>", re.DOTALL)
 
+          # Reasoning models (DeepSeek R1, etc.) prefix a <think>…</think> chain-of-thought,
+          # often containing stray [ ] that wreck the brace-slice below. Strip it, plus any
+          # ```json fences, before extraction.
+          THINK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
+          FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$", re.MULTILINE)
+
           def _slice_json(text, kind):
               # Lenient extraction: whole-string parse, else the first balanced-ish [..]/{..} span.
-              text = (text or "").strip()
+              text = THINK_RE.sub("", text or "")
+              text = FENCE_RE.sub("", text).strip()
               try:
-                  return json.loads(text)
+                  data = json.loads(text)
               except json.JSONDecodeError:
-                  pass
-              o, c = ("[", "]") if kind == "array" else ("{", "}")
-              i, j = text.find(o), text.rfind(c)
-              if i != -1 and j > i:
-                  try:
-                      return json.loads(text[i:j + 1])
-                  except json.JSONDecodeError:
+                  o, c = ("[", "]") if kind == "array" else ("{", "}")
+                  i, j = text.find(o), text.rfind(c)
+                  data = None
+                  if i != -1 and j > i:
+                      try:
+                          data = json.loads(text[i:j + 1])
+                      except json.JSONDecodeError:
+                          return None
+                  else:
                       return None
-              return None
+              # When an array is expected but the model wrapped it in an object
+              # ({"candidates":[...]}, {"findings":[...]}, …), unwrap the first list value.
+              if kind == "array" and isinstance(data, dict):
+                  for v in data.values():
+                      if isinstance(v, list):
+                          return v
+              return data
 
           def ask_json(system_text, user_text, kind="array", max_tokens=MAX_OUT):
               # One forced-JSON turn with a single repair retry. This is the root fix for the old
@@ -520,6 +535,30 @@ jobs:
               except (TypeError, ValueError):
                   return 0.5
 
+          # Reasoning models paraphrase the schema keys (issue/description/reason/… instead of
+          # title/hypothesis), which used to make _usable() silently drop every candidate. Map
+          # the common aliases back onto the canonical keys at ingestion so paraphrased findings
+          # survive and render.
+          TITLE_ALIASES = ("title", "issue", "summary", "name", "problem", "finding", "message")
+          HYPO_ALIASES = ("hypothesis", "description", "reason", "detail", "details",
+                          "explanation", "rationale", "why")
+
+          def _usable(c):
+              return bool(str(c.get("title", "")).strip() or str(c.get("hypothesis", "")).strip())
+
+          def _norm_keys(c):
+              if not str(c.get("title", "")).strip():
+                  for k in TITLE_ALIASES:
+                      if str(c.get(k, "")).strip():
+                          c["title"] = c[k]
+                          break
+              if not str(c.get("hypothesis", "")).strip():
+                  for k in HYPO_ALIASES:
+                      if str(c.get(k, "")).strip():
+                          c["hypothesis"] = c[k]
+                          break
+              return c
+
           candidates = []
           for path, seg in segments:
               arr = ask_json(sys1, f"File: {path}\n\nDiff (DATA):\n{seg[:20000]}" + PR_CTX, "array") or []
@@ -528,8 +567,13 @@ jobs:
                   for c in arr:
                       if isinstance(c, dict):
                           c["file"] = path
-                          candidates.append(c)
+                          candidates.append(_norm_keys(c))
                           n += 1
+                  # Surface the model's actual keys when nothing was usable, so a new
+                  # schema-paraphrase shows up in the log instead of a silent 0.
+                  if n and not any(_usable(c) for c in candidates if c.get("file") == path):
+                      seen = sorted({k for c in arr if isinstance(c, dict) for k in c})
+                      print(f"stage1 {path}: {n} parsed but unusable; keys={seen}", file=sys.stderr)
               print(f"stage1 {path}: {n} candidate(s)", file=sys.stderr)
 
           # Drop ONLY degenerate candidates (no title AND no hypothesis) so a model that emits
@@ -538,8 +582,6 @@ jobs:
           # real candidates all below 0.3 and the old `>= CONF_MIN` filter silently nuked every one
           # (0 findings on a PR with real bugs). Volume is bounded by dedup + CAND_CAP + verify-
           # gating instead; confidence is still used only to LABEL Medium/Low confirmed-vs-advisory.
-          def _usable(c):
-              return bool(str(c.get("title", "")).strip() or str(c.get("hypothesis", "")).strip())
           candidates = [c for c in candidates if _usable(c)]
           candidates = dedupe(candidates)  # collapse the same issue raised from multiple files
           candidates.sort(key=lambda c: SEV_RANK.get(str(c.get("severity", "")).lower(), 4))
