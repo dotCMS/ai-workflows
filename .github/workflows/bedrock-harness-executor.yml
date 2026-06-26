@@ -679,7 +679,7 @@ jobs:
           pr = _price_for(MODEL)
           if pr:
               cost = tot_in / 1e6 * pr[0] + tot_out / 1e6 * pr[1]
-              cost_str = f" · est. ~${cost:.4f}"
+              cost_str = f" · est. ~${cost:.3f}"
 
           with open("/tmp/usage.txt", "w", encoding="utf-8") as f:
               f.write(f"in: {tot_in} · out: {tot_out} · total: {tot_in + tot_out} · calls: {ncalls}{cost_str}")

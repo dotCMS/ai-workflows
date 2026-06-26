@@ -475,7 +475,7 @@ jobs:
           _pr = PRICES.get(model)
           _cost = ""
           if _pr and isinstance(it, int) and isinstance(ot, int):
-              _cost = f" · est. ~${it / 1e6 * _pr[0] + ot / 1e6 * _pr[1]:.4f}"
+              _cost = f" · est. ~${it / 1e6 * _pr[0] + ot / 1e6 * _pr[1]:.3f}"
           with open("/tmp/usage.txt", "w", encoding="utf-8") as f:
               f.write(f"in: {it} · out: {ot} (reasoning: {rt}) · total: {tt}{_cost}")
           print("Tokens:", open("/tmp/usage.txt", encoding="utf-8").read())
