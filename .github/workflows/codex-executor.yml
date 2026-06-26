@@ -498,7 +498,7 @@ jobs:
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "### 🔄 dotBot Review (Codex) — in progress\n\n"
+            printf "### 🔄 dotBot Review (Bedrock Mantle) — in progress\n\n"
             printf "<sub>**%s** · Run: [#%s](%s)</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
           /tmp/sticky-comment.sh "${PR_NUMBER}" /tmp/comment.md
@@ -569,11 +569,11 @@ jobs:
           # Same "dotBot Review" branding + h3 header + bold-model footer as the bedrock harness,
           # with "(Codex)" marking the path.
           case "${OUTCOME:-ok}" in
-            truncated)        HEADER="### ⚠️ dotBot Review (Codex) — truncated (partial; hit output-token budget)" ;;
-            incomplete-empty) HEADER="### ❌ dotBot Review (Codex) — no output (reasoning exhausted the token budget)" ;;
-            failed)           HEADER="### ❌ dotBot Review (Codex) — model service error" ;;
-            error)            HEADER="### ❌ dotBot Review (Codex) — no output" ;;
-            *)                HEADER="### 🤖 dotBot Review (Codex)" ;;
+            truncated)        HEADER="### ⚠️ dotBot Review (Bedrock Mantle) — truncated (partial; hit output-token budget)" ;;
+            incomplete-empty) HEADER="### ❌ dotBot Review (Bedrock Mantle) — no output (reasoning exhausted the token budget)" ;;
+            failed)           HEADER="### ❌ dotBot Review (Bedrock Mantle) — model service error" ;;
+            error)            HEADER="### ❌ dotBot Review (Bedrock Mantle) — no output" ;;
+            *)                HEADER="### 🤖 dotBot Review (Bedrock Mantle)" ;;
           esac
           {
             printf "%s\n\n" "${STICKY_MARKER}"
@@ -608,7 +608,7 @@ jobs:
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "### ❌ dotBot Review (Codex) — failed\n\n"
+            printf "### ❌ dotBot Review (Bedrock Mantle) — failed\n\n"
             printf "The review job failed before producing output. See the run for details.\n\n"
             printf "<sub>**%s** · Run: [#%s](%s)</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
@@ -629,7 +629,7 @@ jobs:
           RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           {
             printf "%s\n\n" "${STICKY_MARKER}"
-            printf "### ⏱️ dotBot Review (Codex) — canceled\n\n"
+            printf "### ⏱️ dotBot Review (Bedrock Mantle) — canceled\n\n"
             printf "The review run was canceled before completing — superseded by a newer push, or it timed out.\n\n"
             printf "<sub>**%s** · Run: [#%s](%s)</sub>\n" "${MODEL_ID}" "${GITHUB_RUN_ID}" "${RUN_LINK}"
           } > /tmp/comment.md
