@@ -227,16 +227,12 @@ jobs:
           MODEL = os.environ["MODEL_ID"]
           REGION = os.environ["AWS_REGION"]
           MAX_OUT_RAW = int(os.environ.get("MAX_OUTPUT_TOKENS") or "8000")
-          # Per-stage output budgets. Reasoning models (DeepSeek-R1, Opus) count THINKING against
-          # the output budget, so the two stages need DIFFERENT ceilings:
-          #   * Stage 1 (batched) scans many files at once and must emit a multi-file candidate
-          #     array — a tight cap makes a reasoning model spend the budget thinking and emit
-          #     truncated/empty JSON (DeepSeek did exactly this on the 18-file batch). Give it room.
-          #   * Verify emits a one-line verdict, so a small cap is plenty AND keeps the few verify
-          #     turns fast.
-          # (Before batching, the harness made ~60-90 micro-calls and a high cap made each over-
-          # think; now there are only a handful of calls, so a generous Stage-1 budget is cheap.)
-          STAGE1_MAX_OUT = min(max(MAX_OUT_RAW, 16000), 24000)
+          # Per-turn output budget. Both stages emit SMALL output (a per-file candidate array, or a
+          # one-line verdict), so a ~12k ceiling is ample even with reasoning headroom, and keeps
+          # reasoning models (DeepSeek-R1, Opus) from over-thinking each of the ~20-25 calls. A
+          # bigger single-shot value (e.g. the orchestrator's 32k default) only balloons wall-clock
+          # here. Override via max_output_tokens if a model truncates.
+          STAGE1_MAX_OUT = min(MAX_OUT_RAW, 12000)
           VERIFY_MAX_OUT = min(MAX_OUT_RAW, 12000)
           MAX_OUT = STAGE1_MAX_OUT  # default for converse()/ask_json(); verify passes VERIFY_MAX_OUT
           MAX_ITERS = int(os.environ.get("MAX_ITERATIONS") or "8")
@@ -444,7 +440,6 @@ jobs:
           FILE_CAP = 40       # max files reviewed (logged if exceeded — no silent truncation)
           CAND_CAP = 12       # max candidates carried into verification
           VERIFY_ITERS = 2    # read-only tool calls allowed per verified candidate
-          STAGE1_BATCH_CHARS = 45000   # batch files into one Stage-1 call up to this size
           CONF_MIN = 0.3      # drop Stage-1 candidates below this confidence outright
           CONF_CONFIRM = 0.7  # Medium/Low: confidence >= this counts as confirmed (no tool verify)
           VERIFY_SEVERITIES = {"critical", "high"}  # only these get the tool-backed verify loop
@@ -499,31 +494,20 @@ jobs:
                       kept[hit] = f
               return kept
 
-          # ---- Stage 1: candidate findings, BATCHED (no tools, forced JSON) -------------
-          # Partition the diff into size-bounded batches instead of one call PER file: a normal PR
-          # fits in ONE call, only a large diff splits into a few — same coverage (every file's
-          # diff is still sent), far fewer model calls. Each candidate is tagged with its file.
-          def _batches(segs):
-              batch, size = [], 0
-              for path, seg in segs:
-                  s = seg[:20000]
-                  if batch and size + len(s) > STAGE1_BATCH_CHARS:
-                      yield batch
-                      batch, size = [], 0
-                  batch.append((path, s))
-                  size += len(s)
-              if batch:
-                  yield batch
-
+          # ---- Stage 1: per-file candidate findings (no tools, forced JSON) -------------
+          # ONE call per file = independent samples → stable recall. Batching all files into a
+          # single call made the whole review hinge on one noisy sample, and cheap models then
+          # rolled zero findings (qwen: 8 candidates one run, 0 the next on identical code).
+          # Per-file averages that out. Each candidate carries a confidence used for cheap
+          # calibration below; severity gating (Stage 2) is what keeps the call count down.
           sys1 = (
               review_rules
-              + "\n\nYou are scanning the diffs of one or more files for likely bug, security, or "
-              + "correctness issues. Output ONLY a JSON array of candidates: "
-              + '[{"file":"<exact path from a `File:` header below>","severity":"Critical|High|Medium|Low",'
-              + '"line":<int in the new file>,"title":"...","hypothesis":"what may be wrong",'
-              + '"confidence":<float 0.0-1.0, how sure you are it is a real bug>}]. '
-              + "Set `file` to the path of the `File:` section the issue is in. Be generous — these are "
-              + "candidates that get verified next. Empty array [] if nothing." + prior_block + SECURITY
+              + "\n\nYou are scanning ONE file's diff for likely bug, security, or correctness issues. "
+              + "Output ONLY a JSON array of candidates: "
+              + '[{"severity":"Critical|High|Medium|Low","line":<int in the new file>,"title":"...",'
+              + '"hypothesis":"what may be wrong","confidence":<float 0.0-1.0, how sure it is a real bug>}]. '
+              + "Be generous — these are candidates that get verified next. Empty array [] if nothing."
+              + prior_block + SECURITY
           )
 
           def _conf(c):
@@ -533,22 +517,16 @@ jobs:
                   return 0.5
 
           candidates = []
-          for nb, batch in enumerate(_batches(segments), 1):
-              paths = [p for p, _ in batch]
-              body = "\n\n".join(f"File: {p}\n\nDiff (DATA):\n{s}" for p, s in batch)
-              arr = ask_json(sys1, body + PR_CTX, "array") or []
+          for path, seg in segments:
+              arr = ask_json(sys1, f"File: {path}\n\nDiff (DATA):\n{seg[:20000]}" + PR_CTX, "array") or []
               n = 0
               if isinstance(arr, list):
                   for c in arr:
-                      if not isinstance(c, dict):
-                          continue
-                      f = str(c.get("file", "")).strip()
-                      if f not in paths:  # model garbled/omitted file: safe only if batch is 1 file
-                          f = paths[0] if len(paths) == 1 else (f or "(unknown)")
-                      c["file"] = f
-                      candidates.append(c)
-                      n += 1
-              print(f"stage1 batch {nb} ({len(batch)} file(s)): {n} candidate(s)", file=sys.stderr)
+                      if isinstance(c, dict):
+                          c["file"] = path
+                          candidates.append(c)
+                          n += 1
+              print(f"stage1 {path}: {n} candidate(s)", file=sys.stderr)
 
           # Drop degenerate candidates (no title AND no hypothesis) so a model that emits
           # placeholder/truncated objects never yields blank "(unknown)" findings; then drop
