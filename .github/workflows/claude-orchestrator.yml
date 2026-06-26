@@ -107,6 +107,11 @@ on:
         required: false
         type: string
         default: 'critical,high'
+      model_prices:
+        description: 'Agentic harness only: optional JSON overriding the built-in per-model price table (USD per 1M tokens) for the estimated-cost footer. e.g. {"qwen.qwen3-next-80b-a3b":{"in":0.40,"out":1.60}}.'
+        required: false
+        type: string
+        default: ''
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key — required only when using the direct Anthropic API path (model_id empty)'
@@ -256,6 +261,7 @@ jobs:
       use_sticky_comment: ${{ inputs.use_sticky_comment }}
       max_output_tokens: ${{ inputs.max_output_tokens }}
       block_severities: ${{ inputs.block_severities }}
+      model_prices: ${{ inputs.model_prices }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}
 
@@ -274,5 +280,6 @@ jobs:
       use_sticky_comment: ${{ inputs.use_sticky_comment }}
       reasoning_effort: ${{ inputs.reasoning_effort }}
       max_output_tokens: ${{ inputs.max_output_tokens }}
+      model_prices: ${{ inputs.model_prices }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
       runner: ${{ inputs.runner }}

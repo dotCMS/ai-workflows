@@ -104,6 +104,11 @@ on:
         required: false
         type: number
         default: 32000
+      model_prices:
+        description: 'Optional JSON overriding the built-in per-model price table (USD per 1M tokens) for the estimated-cost footer. e.g. {"openai.gpt-5.5":{"in":1.25,"out":10.0}}. Unknown models omit the cost.'
+        required: false
+        type: string
+        default: ''
       reasoning_effort:
         description: 'Reasoning effort for GPT-5.x: minimal | low | medium | high. Higher = better review, more reasoning tokens + latency.'
         required: false
@@ -138,6 +143,7 @@ jobs:
       MAX_DIFF_CHARS: ${{ inputs.max_diff_chars }}
       MAX_OUTPUT_TOKENS: ${{ inputs.max_output_tokens }}
       REASONING_EFFORT: ${{ inputs.reasoning_effort }}
+      MODEL_PRICES: ${{ inputs.model_prices }}
       # Default uses the model id so different models naturally get different stickies.
       # In non-sticky mode the marker carries the head SHA, so a re-run on the same
       # commit updates its comment in place (in-progress -> final, no orphan) while a
@@ -447,8 +453,31 @@ jobs:
           ot = _g(usage, "output_tokens")
           tt = _g(usage, "total_tokens")
           rt = _g(_g(usage, "output_tokens_details", None), "reasoning_tokens")
+          # Estimated run cost (USD per 1M tokens; APPROXIMATE — verify vs AWS/mantle pricing,
+          # override via the model_prices input). Unknown model => cost omitted, never guessed.
+          PRICES = {
+              "us.anthropic.claude-opus-4-8": (15.0, 75.0),
+              "us.deepseek.r1-v1:0":          (1.35, 5.40),
+              "qwen.qwen3-next-80b-a3b":      (0.40, 1.60),
+              "zai.glm-5":                    (0.60, 2.20),
+              "openai.gpt-5.5":               (1.25, 10.0),
+          }
+          _raw_prices = os.environ.get("MODEL_PRICES", "").strip()
+          if _raw_prices:
+              try:
+                  for _k, _v in (json.loads(_raw_prices) or {}).items():
+                      if isinstance(_v, dict) and "in" in _v and "out" in _v:
+                          PRICES[_k] = (float(_v["in"]), float(_v["out"]))
+                      elif isinstance(_v, (list, tuple)) and len(_v) == 2:
+                          PRICES[_k] = (float(_v[0]), float(_v[1]))
+              except Exception as _e:  # noqa: BLE001
+                  print(f"::warning::model_prices ignored (bad JSON): {_e}", file=sys.stderr)
+          _pr = PRICES.get(model)
+          _cost = ""
+          if _pr and isinstance(it, int) and isinstance(ot, int):
+              _cost = f" · est. ~${it / 1e6 * _pr[0] + ot / 1e6 * _pr[1]:.4f}"
           with open("/tmp/usage.txt", "w", encoding="utf-8") as f:
-              f.write(f"in: {it} · out: {ot} (reasoning: {rt}) · total: {tt}")
+              f.write(f"in: {it} · out: {ot} (reasoning: {rt}) · total: {tt}{_cost}")
           print("Tokens:", open("/tmp/usage.txt", encoding="utf-8").read())
 
           # Exit 0 whenever we have a terminal response to diagnose (incomplete / failed / empty):

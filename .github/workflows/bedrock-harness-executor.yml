@@ -109,6 +109,15 @@ on:
         required: false
         type: string
         default: 'critical,high'
+      model_prices:
+        description: >-
+          Optional JSON object overriding/extending the built-in per-model price table, used to
+          print an estimated run cost in the footer. USD per 1,000,000 tokens, keyed by model id:
+          {"qwen.qwen3-next-80b-a3b":{"in":0.40,"out":1.60}}. Tuples [in,out] also accepted.
+          Overrides the built-in approximate prices; unknown models simply omit the cost.
+        required: false
+        type: string
+        default: ''
       timeout_minutes:
         description: 'Job timeout in minutes. The agentic loop makes several model calls.'
         required: false
@@ -135,6 +144,7 @@ jobs:
       MAX_OUTPUT_TOKENS: ${{ inputs.max_output_tokens }}
       MAX_ITERATIONS: ${{ inputs.max_iterations }}
       BLOCK_SEVERITIES: ${{ inputs.block_severities }}
+      MODEL_PRICES: ${{ inputs.model_prices }}
       # Same marker scheme as the other executors: sticky (no SHA) updates one comment across
       # commits; non-sticky carries the head SHA for per-commit history. Trailing " -->" keeps
       # the sticky marker from being a prefix of the SHA form.
@@ -217,6 +227,17 @@ jobs:
           MODEL = os.environ["MODEL_ID"]
           REGION = os.environ["AWS_REGION"]
           MAX_OUT = int(os.environ.get("MAX_OUTPUT_TOKENS") or "8000")
+          # Per-turn budget. The harness emits only SMALL structured output each turn (a candidate
+          # array, or a one-line verdict), but reasoning models count THINKING against this budget —
+          # so a big single-shot value (e.g. the orchestrator's 32k default, sized for ONE large
+          # review) makes every one of the ~60-90 micro-calls over-think, ballooning wall-clock on
+          # slow models (Opus/DeepSeek) for zero output-quality gain. Clamp to a per-turn ceiling
+          # with ample reasoning headroom. Override via max_output_tokens if a model truncates.
+          HARNESS_TURN_CAP = 12000
+          if MAX_OUT > HARNESS_TURN_CAP:
+              print(f"::notice::clamping per-turn max_output_tokens {MAX_OUT} -> {HARNESS_TURN_CAP} "
+                    f"(harness emits small per-turn output; reasoning still has headroom)", file=sys.stderr)
+              MAX_OUT = HARNESS_TURN_CAP
           MAX_ITERS = int(os.environ.get("MAX_ITERATIONS") or "8")
           TOOL_RESULT_CAP = 12000  # chars per tool result, to bound token growth
 
@@ -328,16 +349,32 @@ jobs:
 
           TOOLS = {"grep": tool_grep, "read_file": tool_read_file, "list_dir": tool_list_dir}
 
+          # Tool telemetry so failures are VISIBLE, not silent. The old bwrap sandbox failed on
+          # every call and the reviewer degraded to diff-only with nothing in the comment to say
+          # so. We now record each errored call and surface them in the review markdown (loudly if
+          # they ALL fail), plus a ::warning:: annotation — so a broken tool layer is obvious.
+          tool_attempts = 0
+          tool_errors = []  # (tool, args_repr, message)
+
           def run_tool(action):
+              global tool_attempts
               name = action.get("tool")
               args = action.get("args", {}) or {}
+              tool_attempts += 1
+              argrepr = json.dumps(args)[:120]
               fn = TOOLS.get(name)
               if not fn:
+                  tool_errors.append((str(name), argrepr, "unknown tool"))
                   return f"unknown tool: {name!r}. Available: grep, read_file, list_dir."
               try:
-                  return fn(args)
+                  res = fn(args)
               except Exception as e:  # noqa: BLE001 — return tool errors to the model, don't crash
-                  return f"{name} failed: {type(e).__name__}: {str(e)[:300]}"
+                  msg = f"{type(e).__name__}: {str(e)[:300]}"
+                  tool_errors.append((name, argrepr, msg))
+                  return f"{name} failed: {msg}"
+              if isinstance(res, str) and "timed out" in res:  # infra failure, not a benign "no matches"
+                  tool_errors.append((name, argrepr, res[:200]))
+              return res
 
           # ---- model plumbing -----------------------------------------------------------
           client = boto3.client("bedrock-runtime", region_name=REGION)
@@ -589,12 +626,63 @@ jobs:
               summary.append("\n✅ No issues found after verification.")
           review_md = "\n".join(summary)
 
+          # Surface tool failures in the comment so a broken tool layer is debuggable at a glance
+          # (loud banner if EVERY call failed → the review is effectively diff-only).
+          if tool_errors:
+              if tool_attempts and len(tool_errors) >= tool_attempts:
+                  review_md += ("\n\n> ⚠️ **All " + str(tool_attempts) + " tool call(s) failed** — the model could "
+                                "not read the repository, so this review is effectively diff-only. Fix the errors "
+                                "below before trusting coverage.")
+              diag = "\n".join(f"- `{t}` `{a}` → {m}" for t, a, m in tool_errors[:25])
+              more = "" if len(tool_errors) <= 25 else f"\n- …and {len(tool_errors) - 25} more"
+              review_md += (f"\n\n<details><summary>🔧 Tool diagnostics — {len(tool_errors)} of {tool_attempts} "
+                            f"tool call(s) errored</summary>\n\n{diag}{more}\n</details>")
+              for t, a, m in tool_errors:
+                  print(f"::warning::tool {t} {a} errored: {m}", file=sys.stderr)
+
           with open("/tmp/findings.json", "w", encoding="utf-8") as f:
               json.dump(norm, f)
           with open("/tmp/review.md", "w", encoding="utf-8") as f:
               f.write(review_md)
+          # ---- estimated run cost ------------------------------------------------------
+          # USD per 1,000,000 tokens (input, output). APPROXIMATE — verify against current AWS
+          # Bedrock pricing; correct/extend per-run via the `model_prices` input (authoritative).
+          # Unknown model => cost omitted (never guessed in the footer). Shown with a leading "~".
+          PRICES = {
+              "us.anthropic.claude-opus-4-8": (15.0, 75.0),
+              "us.deepseek.r1-v1:0":          (1.35, 5.40),
+              "qwen.qwen3-next-80b-a3b":      (0.40, 1.60),
+              "zai.glm-5":                    (0.60, 2.20),
+              "openai.gpt-5.5":               (1.25, 10.0),
+          }
+          raw_prices = os.environ.get("MODEL_PRICES", "").strip()
+          if raw_prices:
+              try:
+                  for k, v in (json.loads(raw_prices) or {}).items():
+                      if isinstance(v, dict) and "in" in v and "out" in v:
+                          PRICES[k] = (float(v["in"]), float(v["out"]))
+                      elif isinstance(v, (list, tuple)) and len(v) == 2:
+                          PRICES[k] = (float(v[0]), float(v[1]))
+              except Exception as e:  # noqa: BLE001
+                  print(f"::warning::model_prices ignored (bad JSON): {e}", file=sys.stderr)
+
+          def _price_for(model):
+              if model in PRICES:
+                  return PRICES[model]
+              base = re.sub(r"^[a-z]+\.", "", model)  # strip region/profile prefix (us./global./eu.)
+              for k, v in PRICES.items():
+                  if re.sub(r"^[a-z]+\.", "", k) == base:
+                      return v
+              return None
+
+          cost_str = ""
+          pr = _price_for(MODEL)
+          if pr:
+              cost = tot_in / 1e6 * pr[0] + tot_out / 1e6 * pr[1]
+              cost_str = f" · est. ~${cost:.4f}"
+
           with open("/tmp/usage.txt", "w", encoding="utf-8") as f:
-              f.write(f"in: {tot_in} · out: {tot_out} · total: {tot_in + tot_out} · calls: {ncalls}")
+              f.write(f"in: {tot_in} · out: {tot_out} · total: {tot_in + tot_out} · calls: {ncalls}{cost_str}")
           with open("/tmp/outcome.txt", "w", encoding="utf-8") as f:
               f.write("ok")
           print(f"outcome: ok; files: {len(segments)}; candidates: {len(candidates)}; "
