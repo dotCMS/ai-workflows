@@ -25,17 +25,16 @@ The repository implements a reusable workflow architecture with model-aware rout
 | `model_id` value                                  | Routed to                          | Notes                                          |
 | ------------------------------------------------- | ---------------------------------- | ---------------------------------------------- |
 | _(empty entry)_                                   | `claude-executor` (`anthropic-api`)| Backward-compat default; requires `ANTHROPIC_API_KEY` secret |
-| `claude-*` (plain name/alias, e.g. `claude-fable-5`, `claude-opus-4-8`) | `claude-executor` (`anthropic-api`) | Pins the direct-API run to this model; requires `ANTHROPIC_API_KEY` secret |
-| `*.anthropic.*` (e.g. `global.anthropic.claude-sonnet-4-6`) | `claude-executor` (`anthropic-bedrock`) | Bedrock inference profile; requires `bedrock_role_arn` input |
+| `*.anthropic.*` (e.g. `global.anthropic.claude-sonnet-4-6`, `global.anthropic.claude-fable-5`) | `claude-executor` (`anthropic-bedrock`) | Bedrock inference profile; requires `bedrock_role_arn` input. Matches on the `anthropic.` family prefix, not a per-model allowlist — a new model (Fable, a future release) needs no code change here, only a live Bedrock inference profile |
 | `anthropic.*` (bare)                              | `claude-executor` (`anthropic-bedrock`) | Requires `bedrock_role_arn` input              |
 | `openai.*` (e.g. `openai.gpt-5.5`, `openai.gpt-5.4`) | `codex-executor`                  | Requires `bedrock_role_arn`; mantle `/openai/v1` (gpt-oss → `/v1`) |
 | Anything else (Nova, Llama, Mistral, …)           | `bedrock-generic-executor`          | Requires `bedrock_role_arn` input              |
 
-The matches for the Anthropic and OpenAI families are anchored: `^([a-z]+\.)?anthropic\.` and `^([a-z]+\.)?openai\.` — so a model ID that merely contains the substring `anthropic.`/`openai.` (e.g. `us.not-anthropic.foo`) is **not** misrouted. A plain `claude-*` name (no dots before it, so it can't be a Bedrock inference profile) is checked separately and routes to the direct Anthropic API rather than Bedrock — this is how you pin a specific Claude model (e.g. Fable) without a Bedrock inference profile. `openai.*` is checked before the generic fallback.
+The matches for the Anthropic and OpenAI families are anchored: `^([a-z]+\.)?anthropic\.` and `^([a-z]+\.)?openai\.` — so a model ID that merely contains the substring `anthropic.`/`openai.` (e.g. `us.not-anthropic.foo`) is **not** misrouted. `openai.*` is checked before the generic fallback.
 
 **Parallel review example** — 3 reviewers, one PR, mixed providers:
 ```yaml
-model_id: "claude-fable-5, global.anthropic.claude-sonnet-4-6, openai.gpt-5.5"
+model_id: "global.anthropic.claude-fable-5, global.anthropic.claude-sonnet-4-6, openai.gpt-5.5"
 ```
 Each model posts its own sticky comment (leave `sticky_namespace` empty — markers key on `model_id`).
 

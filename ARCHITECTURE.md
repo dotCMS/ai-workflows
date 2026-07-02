@@ -84,7 +84,7 @@ flowchart TD
         codex_exec["codex-executor.yml<br/>(OpenAI GPT/Codex)"]
 
         orch --> route
-        route -->|"empty, claude-*, or *.anthropic.*"| claude_exec
+        route -->|"empty or *.anthropic.*"| claude_exec
         route -->|"openai.*"| codex_exec
         route -->|"anything else"| generic_exec
     end
@@ -112,8 +112,7 @@ Nodes shaded green are new in v3 (`codex-executor` added later for the OpenAI/ma
 | `model_id` value                                              | Provider mode       | Executor                          |
 | ------------------------------------------------------------- | ------------------- | --------------------------------- |
 | _(empty entry)_                                                | `anthropic-api`     | `claude-executor.yml`             |
-| `claude-*` (plain name/alias, e.g. `claude-fable-5`)          | `anthropic-api`     | `claude-executor.yml`             |
-| `anthropic.*` or `<region>.anthropic.*`                       | `anthropic-bedrock` | `claude-executor.yml`             |
+| `anthropic.*` or `<region>.anthropic.*` (e.g. `global.anthropic.claude-fable-5`) | `anthropic-bedrock` | `claude-executor.yml`             |
 | `openai.*` (e.g. `openai.gpt-5.5`, `openai.gpt-5.4`)          | `openai-mantle`     | `codex-executor.yml`              |
 | Anything else (`us.amazon.*`, `meta.*`, `mistral.*`, ...)     | `bedrock-generic`   | `bedrock-generic-executor.yml`    |
 

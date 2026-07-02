@@ -3,12 +3,12 @@
 #
 # MODEL: reviews run on AWS Bedrock. Set the model via the repo/org variable
 # BEDROCK_MODEL_ID and the IAM role via BEDROCK_ROLE_ARN. The orchestrator routes
-# by model id: anthropic.*/claude-* -> Claude, openai.* -> Bedrock-mantle (codex),
-# everything else -> bedrock-generic (Converse). No ANTHROPIC_API_KEY needed.
+# by model id: anthropic.* -> Claude, openai.* -> Bedrock-mantle (codex), everything
+# else -> bedrock-generic (Converse). No ANTHROPIC_API_KEY needed.
 #
 # PARALLEL REVIEWERS: BEDROCK_MODEL_ID accepts up to 3 comma-separated models —
 # each reviews the PR independently with its own sticky comment, e.g.
-#   BEDROCK_MODEL_ID: "claude-fable-5, global.anthropic.claude-sonnet-4-6, openai.gpt-5.5"
+#   BEDROCK_MODEL_ID: "global.anthropic.claude-fable-5, global.anthropic.claude-sonnet-4-6, openai.gpt-5.5"
 
 name: Claude AI Integration
 

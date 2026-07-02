@@ -4,10 +4,10 @@
 # PURPOSE: This workflow orchestrates Claude AI interactions across multiple
 # model providers. Routes by model_id to the appropriate executor:
 #
-#   - Empty model_id, plain "claude-*" name (e.g. claude-fable-5), or *.anthropic.*
-#     (Bedrock inference profile)
-#       -> claude-executor.yml (direct Anthropic API for the first two forms,
-#          Bedrock for the inference-profile form)
+#   - Empty model_id or *.anthropic.* (any inference profile, e.g. any new Claude
+#     model such as global.anthropic.claude-fable-5 — no code change needed to
+#     add a model, the match is on the "anthropic." family prefix, not a name list)
+#       -> claude-executor.yml (existing Anthropic path; API or Bedrock)
 #   - Any other model_id (us.amazon.*, meta.*, mistral.*, cohere.*, ai21.*, ...)
 #       -> bedrock-generic-executor.yml (Bedrock Converse API + sticky comments)
 #
@@ -67,7 +67,7 @@ on:
         type: string
       # --- Multi-model inputs (v3) ---
       model_id:
-        description: 'Comma-separated model IDs, max 3 — each reviews the PR independently in parallel. Bedrock inference-profile form (e.g. "global.anthropic.claude-sonnet-4-6", "us.amazon.nova-pro-v1:0") routes to Bedrock. A plain "claude-*" name (e.g. "claude-fable-5") routes to the direct Anthropic API with that model pinned. Empty entry = direct Anthropic API, default model. With multiple models, leave sticky_namespace empty so each model keeps its own comment (markers key on model_id).'
+        description: 'One or more Bedrock model IDs, comma-separated (max 3), inference-profile form (e.g. "global.anthropic.claude-fable-5, us.amazon.nova-pro-v1:0"). Each model reviews the PR independently in parallel. Empty = direct Anthropic API. With multiple models, leave sticky_namespace empty so each model keeps its own comment (markers key on model_id).'
         required: false
         type: string
         default: ''
@@ -209,16 +209,14 @@ jobs:
           anthropic, generic, harness, codex = [], [], [], []
           for m in models:
               if m == "":
-                  # No model → direct Anthropic API, action's default model. Bedrock role not required.
+                  # No model → direct Anthropic API. Bedrock role not required.
                   anthropic.append({"model_id": "", "provider": "anthropic-api"})
               # Anchored match: bare anthropic.* or inference-profile-prefixed <region>.anthropic.*
               # (us./global./eu.). Avoids false matches on IDs that merely contain "anthropic.".
+              # Matches on the family prefix, not a model-name allowlist, so any new Claude model
+              # (e.g. global.anthropic.claude-fable-5) routes here automatically.
               elif re.match(r"^([a-z]+\.)?anthropic\.", m):
                   anthropic.append({"model_id": m, "provider": "anthropic-bedrock"})
-              # Plain Claude model name (e.g. "claude-fable-5", "claude-opus-4-8") — not a Bedrock
-              # inference profile, so it's a direct-Anthropic-API model pin, not a Bedrock route.
-              elif re.match(r"^claude-", m):
-                  anthropic.append({"model_id": m, "provider": "anthropic-api"})
               # OpenAI GPT/Codex — served only by bedrock-mantle, routed to the codex executor.
               elif re.match(r"^([a-z]+\.)?openai\.", m):
                   codex.append(m)
