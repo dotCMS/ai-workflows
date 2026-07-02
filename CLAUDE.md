@@ -12,25 +12,32 @@ The repository implements a reusable workflow architecture with model-aware rout
 
 ### Core Workflows
 
-- **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): Lightweight wrapper that handles @claude mention detection AND routes to the appropriate executor based on `model_id`. Consumer repositories call this with `trigger_mode: interactive` or `trigger_mode: automatic`. Exactly one executor runs per call.
+- **Claude Orchestrator** (`.github/workflows/claude-orchestrator.yml`): Lightweight wrapper that handles @claude mention detection AND routes to the appropriate executor(s) based on `model_id`. Consumer repositories call this with `trigger_mode: interactive` or `trigger_mode: automatic`. `model_id` accepts a comma-separated list of up to 3 models — each reviews the PR independently and in parallel, fanned out via `strategy.matrix` on the executor(s) its models route to.
 - **Claude Executor** (`.github/workflows/claude-executor.yml`): Execution engine for Anthropic models — runs `anthropics/claude-code-action@v1` either against the direct Anthropic API (`provider: anthropic-api`, default) or via AWS Bedrock (`provider: anthropic-bedrock`, OIDC + `use_bedrock=true`).
 - **Bedrock Generic Executor** (`.github/workflows/bedrock-generic-executor.yml`): Execution engine for **any non-Anthropic Bedrock model** (Amazon Nova, Meta Llama, Mistral, Cohere, AI21). Uses the Bedrock Converse API and maintains its own sticky comment via an inlined helper (set up to `/tmp` at job start, so no cross-repo path dependency).
 - **Codex Executor** (`.github/workflows/codex-executor.yml`): Execution engine for **OpenAI GPT/Codex models** (`openai.gpt-5.5`, `openai.gpt-5.4`). These are served only by the separate **bedrock-mantle** endpoint (OpenAI Responses API), not bedrock-runtime — so it calls mantle with the **OpenAI SDK** authenticated by a **short-term Bedrock bearer token** minted in-process from the OIDC-assumed-role session (`aws-bedrock-token-generator`), and streams `response.output_text.delta` events. The token is OIDC-derived (no long-lived secret, nothing to clean up, ≤1h via the role session) and never written to env/disk/logs; IAM grants `bedrock-mantle:CallWithBearerToken` scoped to `BearerTokenType=SHORT_TERM`. Streaming is mandatory (GPT-5.x reasons before emitting). **Base path is model-dependent:** frontier GPT-5.x/Codex are served under `/openai/v1`, open-weight `gpt-oss-*` under `/v1` — the executor picks by model id (they reject each other's path; verified live 2026-06-11, #34). Uses the requested region as-is (GPT-5.5/5.4 are served in us-east-1 and us-east-2, GPT-5.4 also us-west-2). Sends `store: false` for zero data retention. Reuses the same `/tmp` sticky-comment helper. See dotCMS/Infrastructure-as-code#7836.
 - **Deployment Guard** (`.github/workflows/deployment-guard.yml`): Reusable workflow for validating deployment changes with configurable rules. Features organization-based bypass for trusted members, file allowlist validation, image-only change detection, and comprehensive image validation (format, repository, version pattern, registry existence, anti-downgrade logic).
 
-### Multi-model Routing (v3)
+### Multi-model Routing (v4)
 
-The orchestrator picks the executor by inspecting `model_id`:
+`model_id` accepts a comma-separated list of **up to 3** models; the orchestrator rejects a 4th with `::error::`. Each entry is routed independently by inspecting its form:
 
 | `model_id` value                                  | Routed to                          | Notes                                          |
 | ------------------------------------------------- | ---------------------------------- | ---------------------------------------------- |
-| _(empty / unset)_                                 | `claude-executor` (`anthropic-api`)| Backward-compat default; requires `ANTHROPIC_API_KEY` secret |
-| `*.anthropic.*` (e.g. `global.anthropic.claude-sonnet-4-6`) | `claude-executor` (`anthropic-bedrock`) | Requires `bedrock_role_arn` input              |
+| _(empty entry)_                                   | `claude-executor` (`anthropic-api`)| Backward-compat default; requires `ANTHROPIC_API_KEY` secret |
+| `claude-*` (plain name/alias, e.g. `claude-fable-5`, `claude-opus-4-8`) | `claude-executor` (`anthropic-api`) | Pins the direct-API run to this model; requires `ANTHROPIC_API_KEY` secret |
+| `*.anthropic.*` (e.g. `global.anthropic.claude-sonnet-4-6`) | `claude-executor` (`anthropic-bedrock`) | Bedrock inference profile; requires `bedrock_role_arn` input |
 | `anthropic.*` (bare)                              | `claude-executor` (`anthropic-bedrock`) | Requires `bedrock_role_arn` input              |
 | `openai.*` (e.g. `openai.gpt-5.5`, `openai.gpt-5.4`) | `codex-executor`                  | Requires `bedrock_role_arn`; mantle `/openai/v1` (gpt-oss → `/v1`) |
 | Anything else (Nova, Llama, Mistral, …)           | `bedrock-generic-executor`          | Requires `bedrock_role_arn` input              |
 
-The matches for the Anthropic and OpenAI families are anchored: `^([a-z]+\.)?anthropic\.` and `^([a-z]+\.)?openai\.` — so a model ID that merely contains the substring `anthropic.`/`openai.` (e.g. `us.not-anthropic.foo`) is **not** misrouted. `openai.*` is checked before the generic fallback.
+The matches for the Anthropic and OpenAI families are anchored: `^([a-z]+\.)?anthropic\.` and `^([a-z]+\.)?openai\.` — so a model ID that merely contains the substring `anthropic.`/`openai.` (e.g. `us.not-anthropic.foo`) is **not** misrouted. A plain `claude-*` name (no dots before it, so it can't be a Bedrock inference profile) is checked separately and routes to the direct Anthropic API rather than Bedrock — this is how you pin a specific Claude model (e.g. Fable) without a Bedrock inference profile. `openai.*` is checked before the generic fallback.
+
+**Parallel review example** — 3 reviewers, one PR, mixed providers:
+```yaml
+model_id: "claude-fable-5, global.anthropic.claude-sonnet-4-6, openai.gpt-5.5"
+```
+Each model posts its own sticky comment (leave `sticky_namespace` empty — markers key on `model_id`).
 
 ### Sticky Comments
 
