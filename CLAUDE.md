@@ -36,7 +36,7 @@ The matches for the Anthropic and OpenAI families are anchored: `^([a-z]+\.)?ant
 ```yaml
 model_id: "global.anthropic.claude-fable-5, global.anthropic.claude-sonnet-4-6, openai.gpt-5.5"
 ```
-Each model posts its own sticky comment (leave `sticky_namespace` empty — markers key on `model_id`).
+Each model posts its own sticky comment (leave `sticky_namespace` empty — markers key on `model_id`). Fable 5 is only served in `us-east-1` and `eu-north-1` at launch — set `aws_region` accordingly if the orchestrator's `us-east-1` default doesn't apply.
 
 ### Sticky Comments
 
