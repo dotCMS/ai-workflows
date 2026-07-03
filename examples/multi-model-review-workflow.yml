@@ -1,0 +1,41 @@
+# Multi-Model Parallel Review Example (v3.4.0+)
+# This example shows how to run several review models against the same PR at
+# once, each with the same prompt, each posting its own sticky comment.
+#
+# model_id takes a comma-separated list of up to 3 models (the orchestrator
+# rejects a 4th). Each model is routed independently and reviewed in parallel:
+#   - global.anthropic.claude-fable-5     -> claude-executor (Bedrock)
+#   - global.anthropic.claude-sonnet-4-6  -> claude-executor (Bedrock)
+#   - openai.gpt-5.5                      -> codex-executor (bedrock-mantle)
+#
+# Leave sticky_namespace unset with multiple models — sticky-comment markers
+# key on model_id, so each model keeps its own comment lane automatically.
+#
+# Fable 5 is only served in us-east-1 and eu-north-1 at launch; this example
+# uses the orchestrator's us-east-1 default, which already covers it.
+
+name: Multi-Model AI Review
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  multi-model-review:
+    uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
+    with:
+      trigger_mode: automatic
+      enable_mention_detection: false
+      model_id: "global.anthropic.claude-fable-5, global.anthropic.claude-sonnet-4-6, openai.gpt-5.5"
+      bedrock_role_arn: ${{ vars.BEDROCK_ROLE_ARN }}
+      # Same prompt for every reviewer — compare how each model reads the PR.
+      prompt: |
+        Review this pull request for correctness bugs, security issues, and
+        design problems. One line per finding: severity + file:line + why it
+        matters. Skip praise and style nitpicks. If the PR is clean, say so.
+      timeout_minutes: 15
+      runner: ubuntu-latest
