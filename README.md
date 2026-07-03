@@ -162,6 +162,31 @@ Validates deployment changes with sophisticated rules:
 
 ---
 
+## Supported model IDs
+
+The `model_id` input accepts **any model ID AWS Bedrock serves** — the orchestrator routes by pattern, not by allowlist (see the routing table in [CLAUDE.md](./CLAUDE.md#multi-model-routing-v3)). The table below lists the IDs this team has actually run, with the approximate prices used by the executor cost footer (source of truth: the `PRICES` table in `bedrock-harness-executor.yml` — verify against current AWS Bedrock pricing before making cost decisions).
+
+| Model | `model_id` | Executor | ~$/MTok (in / out) | Notes |
+| --- | --- | --- | --- | --- |
+| _(empty)_ | | `claude-executor` (direct Anthropic API) | — | Requires `ANTHROPIC_API_KEY` secret |
+| Claude Sonnet 5 | `global.anthropic.claude-sonnet-5` | `claude-executor` (Bedrock) | 2.00 / 10.00 | Org-wide default (`BEDROCK_MODEL_ID`) |
+| Claude Sonnet 4.6 | `global.anthropic.claude-sonnet-4-6` | `claude-executor` (Bedrock) | 3.00 / 15.00 | |
+| Claude Opus 4.8 | `us.anthropic.claude-opus-4-8` | `claude-executor` (Bedrock) | 15.00 / 75.00 | |
+| Claude Fable 5 | `us.anthropic.claude-fable-5` | `claude-executor` (Bedrock) | 10.00 / 50.00 | |
+| DeepSeek R1 | `us.deepseek.r1-v1:0` | `bedrock-generic` / harness | 1.35 / 5.40 | Must be the cross-region inference-profile ID (`us.` prefix), not the bare model ID. Current `REVIEW_MODEL_ID` in dotCMS/core |
+| Qwen3 Next 80B | `qwen.qwen3-next-80b-a3b` | `bedrock-generic` / harness | 0.40 / 1.60 | |
+| GLM-5 | `zai.glm-5` | `bedrock-generic` / harness | 0.60 / 2.20 | |
+| GPT-5.5 | `openai.gpt-5.5` | `codex-executor` (mantle) | 1.25 / 10.00 | Failing on mantle in both regions as of 2026-06-15 ("Engine not found", AWS-side) |
+| Amazon Nova Pro | `us.amazon.nova-pro-v1:0` | `bedrock-generic` | not priced | Cost footer omitted for unpriced models |
+
+Additional notes:
+
+- **Multi-model reviews** — since v3.3.2, `model_id` accepts a comma-separated list (e.g. `global.anthropic.claude-sonnet-5, us.deepseek.r1-v1:0`); each model reviews the PR independently (#59).
+- **Prefix forms** — `global.`, `us.`, `eu.` inference-profile prefixes all route the same way, and the cost footer strips the prefix when looking up prices, so either form works.
+- **Model access is a separate gate** — a valid-looking ID still fails at runtime unless the AWS account behind `BEDROCK_ROLE_ARN` has a Bedrock **model access grant** for that model. An IAM wildcard on `bedrock:InvokeModel` does *not* grant model access (see dotCMS/infrastructure-as-code `aws/rd/global/terraform/bedrock-code-review/`).
+
+---
+
 ## Using Custom Commands
 
 ### Installing Slash Commands
