@@ -49,6 +49,7 @@ Working examples for quick adoption:
 - **`examples/consumer-repo-workflow.yml`** - Basic @claude mention integration
 - **`examples/infrastructure-consumer-workflow.yml`** - Infrastructure-specific tooling
 - **`examples/advanced-custom-triggers.yml`** - Custom trigger patterns
+- **`examples/multi-model-review-workflow.yml`** - Parallel review across up to 3 models (v3.4.0+)
 
 ---
 
@@ -327,6 +328,7 @@ See the `examples/` directory for complete workflow examples:
 - **`consumer-repo-workflow.yml`** - Basic usage with @claude mentions
 - **`infrastructure-consumer-workflow.yml`** - Infrastructure-specific tooling  
 - **`advanced-custom-triggers.yml`** - Advanced examples using `custom_trigger_condition` for specialized triggers (urgent issues, security reviews, config changes, etc.)
+- **`multi-model-review-workflow.yml`** - Run several models (Claude, Fable, GPT) against the same PR in parallel, one prompt, one sticky comment per model (v3.4.0+)
 
 ### Quick Examples
 
@@ -357,6 +359,18 @@ with:
     contains(github.event.issue.labels.*.name, 'urgent')
   enable_mention_detection: false
 ```
+
+**Multi-model parallel review (v3.4.0+, up to 3 models):**
+```yaml
+uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v3
+with:
+  trigger_mode: automatic
+  enable_mention_detection: false
+  model_id: "global.anthropic.claude-fable-5, global.anthropic.claude-sonnet-4-6, openai.gpt-5.5"
+  bedrock_role_arn: ${{ vars.BEDROCK_ROLE_ARN }}
+  prompt: "Review this PR for quality and security."
+```
+See `examples/multi-model-review-workflow.yml` for a complete workflow.
 
 ---
 

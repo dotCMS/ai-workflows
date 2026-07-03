@@ -65,7 +65,7 @@ In this picture, the workflows in this repository implement the **dotCMS Orchest
 
 ## Diagram 2 — Repo-internal control flow (v3)
 
-Consumer repositories handle their own webhook triggers and call this repo's `claude-orchestrator.yml`. The orchestrator inspects `model_id` and fans out to exactly one executor.
+Consumer repositories handle their own webhook triggers and call this repo's `claude-orchestrator.yml`. The orchestrator inspects `model_id` (up to 3 comma-separated models) and fans out to whichever executor(s) those models route to, one job per model via `strategy.matrix`.
 
 ```mermaid
 flowchart TD
@@ -111,12 +111,12 @@ Nodes shaded green are new in v3 (`codex-executor` added later for the OpenAI/ma
 
 | `model_id` value                                              | Provider mode       | Executor                          |
 | ------------------------------------------------------------- | ------------------- | --------------------------------- |
-| _(empty)_                                                     | `anthropic-api`     | `claude-executor.yml`             |
-| `anthropic.*` or `<region>.anthropic.*`                       | `anthropic-bedrock` | `claude-executor.yml`             |
+| _(empty entry)_                                                | `anthropic-api`     | `claude-executor.yml`             |
+| `anthropic.*` or `<region>.anthropic.*` (e.g. `global.anthropic.claude-fable-5`) | `anthropic-bedrock` | `claude-executor.yml`             |
 | `openai.*` (e.g. `openai.gpt-5.5`, `openai.gpt-5.4`)          | `openai-mantle`     | `codex-executor.yml`              |
 | Anything else (`us.amazon.*`, `meta.*`, `mistral.*`, ...)     | `bedrock-generic`   | `bedrock-generic-executor.yml`    |
 
-The non-matching executor jobs are **skipped** by job-level `if:` conditional, not "ran and exited" — billable runner time is zero for the skipped paths.
+`model_id` accepts up to 3 comma-separated entries (the route job rejects a 4th) — each is routed independently, so a single call can fan out to several executors at once (e.g. one Claude model + one OpenAI model). The non-matching, empty-list executor jobs are **skipped** by job-level `if:` conditional, not "ran and exited" — billable runner time is zero for the skipped paths.
 
 ---
 
@@ -173,7 +173,7 @@ Consumer repositories maintain full control over webhook events — no loss of e
 Centralized execution logic. One place to update Claude Code action versions, IAM patterns, sticky-comment behavior.
 
 ### Cost discipline
-Exactly one executor runs per orchestrator call. Selecting a Claude model never invokes the generic Bedrock path in parallel.
+Only the executor(s) a request's `model_id` values route to ever run — up to 3 in parallel when multiple models are listed, each billed independently. A single Claude model still never invokes the generic Bedrock path.
 
 ### Security isolation
 - Anthropic API path requires per-consumer `ANTHROPIC_API_KEY` (cost tracked per repo, no shared credentials)

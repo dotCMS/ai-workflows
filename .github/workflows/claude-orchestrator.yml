@@ -4,14 +4,17 @@
 # PURPOSE: This workflow orchestrates Claude AI interactions across multiple
 # model providers. Routes by model_id to the appropriate executor:
 #
-#   - Empty model_id or *.anthropic.* (any inference profile)
+#   - Empty model_id or *.anthropic.* (any inference profile, e.g. any new Claude
+#     model such as global.anthropic.claude-fable-5 — no code change needed to
+#     add a model, the match is on the "anthropic." family prefix, not a name list)
 #       -> claude-executor.yml (existing Anthropic path; API or Bedrock)
 #   - Any other model_id (us.amazon.*, meta.*, mistral.*, cohere.*, ai21.*, ...)
 #       -> bedrock-generic-executor.yml (Bedrock Converse API + sticky comments)
 #
-# model_id accepts a comma-separated list; each model reviews the PR independently.
-# The route job sorts the models into one JSON list per executor, and each executor
-# job fans out over its list via strategy.matrix (skipped when its list is empty).
+# model_id accepts a comma-separated list (max 3); each model reviews the PR
+# independently. The route job sorts the models into one JSON list per executor,
+# and each executor job fans out over its list via strategy.matrix (skipped when
+# its list is empty).
 #
 # ARCHITECTURE: Consumer repositories handle their own webhook events and
 # conditional logic, then call this workflow with the appropriate trigger
@@ -64,7 +67,7 @@ on:
         type: string
       # --- Multi-model inputs (v3) ---
       model_id:
-        description: 'One or more Bedrock model IDs, comma-separated, inference-profile form (e.g. "global.anthropic.claude-sonnet-4-6, us.amazon.nova-pro-v1:0"). Each model reviews the PR independently. Empty = direct Anthropic API. With multiple models, leave sticky_namespace empty so each model keeps its own comment (markers key on model_id).'
+        description: 'One or more Bedrock model IDs, comma-separated (max 3), inference-profile form (e.g. "global.anthropic.claude-fable-5, us.amazon.nova-pro-v1:0"). Each model reviews the PR independently in parallel. Empty = direct Anthropic API. With multiple models, leave sticky_namespace empty so each model keeps its own comment (markers key on model_id).'
         required: false
         type: string
         default: ''
@@ -198,6 +201,11 @@ jobs:
           if not models:
               models = [""]
 
+          MAX_MODELS = 3
+          if len(models) > MAX_MODELS:
+              print(f"::error::model_id lists {len(models)} models; max {MAX_MODELS} parallel reviewers", file=sys.stderr)
+              sys.exit(1)
+
           anthropic, generic, harness, codex = [], [], [], []
           for m in models:
               if m == "":
@@ -205,6 +213,8 @@ jobs:
                   anthropic.append({"model_id": "", "provider": "anthropic-api"})
               # Anchored match: bare anthropic.* or inference-profile-prefixed <region>.anthropic.*
               # (us./global./eu.). Avoids false matches on IDs that merely contain "anthropic.".
+              # Matches on the family prefix, not a model-name allowlist, so any new Claude model
+              # (e.g. global.anthropic.claude-fable-5) routes here automatically.
               elif re.match(r"^([a-z]+\.)?anthropic\.", m):
                   anthropic.append({"model_id": m, "provider": "anthropic-bedrock"})
               # OpenAI GPT/Codex — served only by bedrock-mantle, routed to the codex executor.
