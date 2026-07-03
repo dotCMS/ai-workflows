@@ -32,6 +32,8 @@ The orchestrator picks the executor by inspecting `model_id`:
 
 The matches for the Anthropic and OpenAI families are anchored: `^([a-z]+\.)?anthropic\.` and `^([a-z]+\.)?openai\.` — so a model ID that merely contains the substring `anthropic.`/`openai.` (e.g. `us.not-anthropic.foo`) is **not** misrouted. `openai.*` is checked before the generic fallback.
 
+A curated list of tested model IDs with approximate prices lives in [README.md § Supported model IDs](./README.md#supported-model-ids).
+
 ### Sticky Comments
 
 - The Anthropic path's sticky comment is managed by `anthropics/claude-code-action@v1` via `use_sticky_comment`.
