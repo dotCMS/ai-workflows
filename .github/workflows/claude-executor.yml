@@ -207,6 +207,42 @@ jobs:
         env:
           AWS_REGION: ${{ inputs.aws_region }}
 
+      # anthropics/claude-code-action reports this GitHub Actions step as successful even
+      # when the underlying agentic turn errored internally (e.g. the configured Bedrock
+      # model_id has no model-access grant in the target account, or is invalid) — the SDK's
+      # stream-json result still has "is_error": true, but use_sticky_comment never learns
+      # about it, so the PR is left on the initial "I'll analyze this and get back to you"
+      # placeholder forever. Detect that case from the action's execution_file output and
+      # say so explicitly instead of swallowing it.
+      - name: Report internal SDK failure
+        if: steps.claude-api.outputs.execution_file != '' || steps.claude-bedrock.outputs.execution_file != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXECUTION_FILE: ${{ steps.claude-api.outputs.execution_file || steps.claude-bedrock.outputs.execution_file }}
+          MODEL_ID: ${{ inputs.model_id }}
+          PROVIDER: ${{ inputs.provider }}
+          ISSUE_PR_URL: ${{ github.event.issue.pull_request.url }}
+        run: |
+          set -euo pipefail
+          IS_ERROR=$(jq -r '(. // [])[-1].is_error // false' "${EXECUTION_FILE}")
+          [ "${IS_ERROR}" = "true" ] || exit 0
+
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request|pull_request_target|pull_request_review|pull_request_review_comment)
+              PR_NUM="${{ github.event.pull_request.number }}" ;;
+            issue_comment)
+              [ -n "${ISSUE_PR_URL}" ] && PR_NUM="${{ github.event.issue.number }}" ;;
+          esac
+          if [ -z "${PR_NUM:-}" ]; then
+            echo "::warning::Claude backend call failed internally but there's no PR to comment on"
+            exit 0
+          fi
+
+          RUN_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          BODY=$(printf "## ⚠️ AI review failed\n\nClaude did not produce a review — the backend call errored before generating any output (provider: \`%s\`, model: \`%s\`). This usually means the model has no Bedrock access grant in the target account, or the model ID is invalid — not a problem with this PR.\n\n<sub>Run: [#%s](%s)</sub>\n" \
+            "${PROVIDER}" "${MODEL_ID:-default}" "${GITHUB_RUN_ID}" "${RUN_LINK}")
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUM}/comments" -f body="${BODY}"
+
       # If the Claude API step failed at runtime, re-check the API to determine whether
       # the failure was caused by service degradation (skip gracefully) or a real error
       # (fail the job so the team is alerted). Bedrock path doesn't have a health check.
