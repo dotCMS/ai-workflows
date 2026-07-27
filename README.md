@@ -343,6 +343,20 @@ if: |
   )
 ```
 
+### 6. Known limitation: one sticky comment per PR (Anthropic path)
+
+`anthropics/claude-code-action` finds the comment to reuse by **"authored by the Claude app bot"** — a hardcoded user id / login substring, with no per-workflow marker (`src/github/operations/comments/create-initial.ts`). It is not configurable: `bot_id` / `bot_name` only set the git commit identity, and the lookup ignores which workflow is running.
+
+So on a PR where two Anthropic-path workflows both run with `track_progress: true`, the later one resets the earlier one's comment to "Claude Code is working…" and writes its own result over it. This is deterministic, not a race — a concurrency group does not help, it only decides who wins. Seen in [dotCMS/core#36761](https://github.com/dotCMS/core/issues/36761).
+
+Nothing here enforces it, so the convention is:
+
+- **One workflow per PR keeps `track_progress: true`** — the one whose output *is* the auto-updating comment (typically the code review).
+- **Every other Anthropic-path workflow passes `track_progress: false`** and reports through its own marker comment, a label, or a check.
+- The bedrock-generic / harness / codex paths are unaffected — their markers are namespaced via `sticky_namespace`.
+
+The real fix is a namespaced marker upstream in `claude-code-action`.
+
 ---
 
 ## Examples
