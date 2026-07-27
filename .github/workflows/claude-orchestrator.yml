@@ -88,6 +88,11 @@ on:
         required: false
         type: boolean
         default: true
+      track_progress:
+        description: 'Anthropic path only: let the action create and update its own progress comment (true, default). The action finds that comment by "authored by the Claude app bot" with no per-workflow marker, so a second Anthropic-path workflow on the same PR overwrites the first one''s comment. Set false on every such workflow except the one that owns the sticky comment; workflows that report through their own comment or a label do not need it.'
+        required: false
+        type: boolean
+        default: true
       reasoning_effort:
         description: 'Reasoning effort for the OpenAI/Codex (mantle) path: minimal | low | medium | high. Ignored on other paths.'
         required: false
@@ -254,6 +259,7 @@ jobs:
       bedrock_role_arn: ${{ inputs.bedrock_role_arn }}
       aws_region: ${{ inputs.aws_region }}
       use_sticky_comment: ${{ inputs.use_sticky_comment }}
+      track_progress: ${{ inputs.track_progress }}
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 

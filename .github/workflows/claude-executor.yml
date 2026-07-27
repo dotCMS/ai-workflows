@@ -68,7 +68,12 @@ on:
         type: string
         default: 'us-east-1'
       use_sticky_comment:
-        description: 'Reuse one auto-updating comment per PR (true, default). Set false to post a fresh comment on every run, preserving the full feedback history.'
+        description: 'Reuse one auto-updating comment per PR (true, default). Set false to post a fresh comment on every run, preserving the full feedback history. NOTE: the action keys the sticky comment on "authored by the Claude app bot" with no per-workflow marker, so two Anthropic-path workflows on the same PR fight over one comment — give all but one of them track_progress: false.'
+        required: false
+        type: boolean
+        default: true
+      track_progress:
+        description: 'Let the action create and update its own progress comment on the PR (true, default). Set false for workflows that report through their own comment/label and would otherwise hijack another workflow''s sticky comment.'
         required: false
         type: boolean
         default: true
@@ -191,7 +196,7 @@ jobs:
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ steps.args.outputs.composed }}
           use_sticky_comment: ${{ inputs.use_sticky_comment }}
-          track_progress: "true"
+          track_progress: ${{ inputs.track_progress }}
 
       - name: Run Claude Code (Bedrock)
         id: claude-bedrock
@@ -203,7 +208,7 @@ jobs:
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ steps.args.outputs.composed }}
           use_sticky_comment: ${{ inputs.use_sticky_comment }}
-          track_progress: "true"
+          track_progress: ${{ inputs.track_progress }}
         env:
           AWS_REGION: ${{ inputs.aws_region }}
 
