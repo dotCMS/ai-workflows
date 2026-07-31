@@ -1,0 +1,110 @@
+---
+# Autodoc Executor Workflow (Reusable)
+#
+# PURPOSE: Execution engine for the dotCMS autodoc documentation audit pipeline.
+# Runs Claude Code via AWS Bedrock with the AUTODOC_* secrets exposed as env vars
+# so Claude can call the dotCMS AI search and workflow APIs during execution.
+# Uploads the generated report to /tmp/autodoc-report.md as an artifact for the
+# finalize job in the calling workflow to consume.
+#
+# USAGE: Called by dotCMS/core .github/workflows/issue_autodoc.yml.
+# The calling workflow passes the fully-assembled eval context as `prompt` and
+# uses `secrets: inherit` to make AUTODOC_* secrets available here.
+#
+# SECURITY: The job_workflow_ref OIDC claim for this job resolves to
+# dotCMS/ai-workflows/.github/workflows/autodoc-executor.yml@refs/tags/<tag>,
+# which satisfies the trust condition on GitHubActions-BedrockCodeReview.
+
+name: Autodoc Executor (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      prompt:
+        description: 'Fully assembled eval context (issue + PRs + vault + burlap prompt)'
+        required: true
+        type: string
+      bedrock_role_arn:
+        description: 'IAM role ARN to assume via OIDC for Bedrock'
+        required: true
+        type: string
+      model_id:
+        description: 'Bedrock cross-region inference profile ID (e.g. us.anthropic.claude-sonnet-4-6)'
+        required: false
+        type: string
+        default: ''
+      aws_region:
+        description: 'AWS region for Bedrock'
+        required: false
+        type: string
+        default: 'us-east-1'
+      timeout_minutes:
+        description: 'Timeout in minutes for Claude execution'
+        required: false
+        type: number
+        default: 30
+    secrets:
+      AUTODOC_DOTCMS_API_TOKEN_AISEARCH:
+        description: 'Bearer token for the dotCMS AI search API (used by Claude during execution)'
+        required: true
+      AUTODOC_DOTCMS_API_TOKEN_DRAFTING:
+        description: 'Bearer token for the dotCMS workflow/content API'
+        required: true
+      AUTODOC_DOTCMS_BASE_URL:
+        description: 'Base URL of the target dotCMS instance'
+        required: true
+      AUTODOC_DOTCMS_SITE_FOLDER:
+        description: 'Site root for new content, e.g. dotcms.dev:/ (optional)'
+        required: false
+
+jobs:
+  autodoc:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.bedrock_role_arn }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Compose claude_args
+        id: args
+        env:
+          MODEL_ID: ${{ inputs.model_id }}
+        run: |
+          ARGS="--allowedTools Bash,Write"
+          if [ -n "$MODEL_ID" ]; then
+            ARGS="--model $MODEL_ID $ARGS"
+          fi
+          echo "value=$ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude (Bedrock)
+        uses: anthropics/claude-code-action@v1
+        env:
+          AUTODOC_DOTCMS_API_TOKEN_AISEARCH: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_AISEARCH }}
+          AUTODOC_DOTCMS_API_TOKEN_DRAFTING: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_DRAFTING }}
+          AUTODOC_DOTCMS_BASE_URL: ${{ secrets.AUTODOC_DOTCMS_BASE_URL }}
+          AUTODOC_DOTCMS_SITE_FOLDER: ${{ secrets.AUTODOC_DOTCMS_SITE_FOLDER }}
+        with:
+          use_bedrock: "true"
+          prompt: ${{ inputs.prompt }}
+          claude_args: ${{ steps.args.outputs.value }}
+          use_sticky_comment: 'false'
+          track_progress: 'false'
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autodoc-report
+          path: /tmp/autodoc-report.md
+          if-no-files-found: warn
+          retention-days: 1
