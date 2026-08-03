@@ -43,6 +43,11 @@ on:
         required: false
         type: number
         default: 30
+      autodoc_dotcms_site_folder:
+        description: 'Site root for new content, e.g. dotcms.dev:/ (non-sensitive config, passed as input not secret)'
+        required: false
+        type: string
+        default: ''
     secrets:
       AUTODOC_DOTCMS_API_TOKEN_AISEARCH:
         description: 'Bearer token for the dotCMS AI search API (used by Claude during execution)'
@@ -53,9 +58,6 @@ on:
       AUTODOC_DOTCMS_BASE_URL:
         description: 'Base URL of the target dotCMS instance'
         required: true
-      AUTODOC_DOTCMS_SITE_FOLDER:
-        description: 'Site root for new content, e.g. dotcms.dev:/ (optional)'
-        required: false
 
 jobs:
   autodoc:
@@ -67,10 +69,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608 # v4.2.2
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4
         with:
           role-to-assume: ${{ inputs.bedrock_role_arn }}
           aws-region: ${{ inputs.aws_region }}
@@ -87,12 +89,12 @@ jobs:
           echo "value=$ARGS" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude (Bedrock)
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
         env:
           AUTODOC_DOTCMS_API_TOKEN_AISEARCH: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_AISEARCH }}
           AUTODOC_DOTCMS_API_TOKEN_DRAFTING: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_DRAFTING }}
           AUTODOC_DOTCMS_BASE_URL: ${{ secrets.AUTODOC_DOTCMS_BASE_URL }}
-          AUTODOC_DOTCMS_SITE_FOLDER: ${{ secrets.AUTODOC_DOTCMS_SITE_FOLDER }}
+          AUTODOC_DOTCMS_SITE_FOLDER: ${{ inputs.autodoc_dotcms_site_folder }}
         with:
           use_bedrock: "true"
           prompt: ${{ inputs.prompt }}
@@ -102,7 +104,7 @@ jobs:
 
       - name: Upload report artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.0
         with:
           name: autodoc-report
           path: /tmp/autodoc-report.md
