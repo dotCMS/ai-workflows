@@ -9,7 +9,7 @@
 #
 # USAGE: Called by dotCMS/core .github/workflows/issue_autodoc.yml.
 # The calling workflow passes the fully-assembled eval context as `prompt` and
-# uses `secrets: inherit` to make AUTODOC_* secrets available here.
+# explicitly maps AUTODOC_* secrets and the dotCMS base URL as inputs.
 #
 # SECURITY: The job_workflow_ref OIDC claim for this job resolves to
 # dotCMS/ai-workflows/.github/workflows/autodoc-executor.yml@refs/tags/<tag>,
@@ -29,7 +29,7 @@ on:
         required: true
         type: string
       model_id:
-        description: 'Bedrock cross-region inference profile ID (e.g. us.anthropic.claude-sonnet-4-6)'
+        description: 'Bedrock cross-region inference profile ID (e.g. us.anthropic.claude-sonnet-4-6). When omitted, --model is not passed and the action uses its built-in default.'
         required: false
         type: string
         default: ''
@@ -44,19 +44,20 @@ on:
         type: number
         default: 30
       autodoc_dotcms_site_folder:
-        description: 'Site root for new content, e.g. dotcms.dev:/ (non-sensitive config, passed as input not secret)'
+        description: 'Site root for new content, e.g. dotcms.dev:/ (non-sensitive config, passed as input not secret). When empty, content lands on SYSTEM_HOST (dotCMS default site).'
         required: false
         type: string
         default: ''
+      autodoc_dotcms_base_url:
+        description: 'Base URL of the target dotCMS instance, e.g. https://www.dotcms.com (non-sensitive config, passed as input not secret)'
+        required: true
+        type: string
     secrets:
       AUTODOC_DOTCMS_API_TOKEN_AISEARCH:
         description: 'Bearer token for the dotCMS AI search API (used by Claude during execution)'
         required: true
       AUTODOC_DOTCMS_API_TOKEN_DRAFTING:
         description: 'Bearer token for the dotCMS workflow/content API'
-        required: true
-      AUTODOC_DOTCMS_BASE_URL:
-        description: 'Base URL of the target dotCMS instance'
         required: true
 
 jobs:
@@ -93,7 +94,7 @@ jobs:
         env:
           AUTODOC_DOTCMS_API_TOKEN_AISEARCH: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_AISEARCH }}
           AUTODOC_DOTCMS_API_TOKEN_DRAFTING: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_DRAFTING }}
-          AUTODOC_DOTCMS_BASE_URL: ${{ secrets.AUTODOC_DOTCMS_BASE_URL }}
+          AUTODOC_DOTCMS_BASE_URL: ${{ inputs.autodoc_dotcms_base_url }}
           AUTODOC_DOTCMS_SITE_FOLDER: ${{ inputs.autodoc_dotcms_site_folder }}
         with:
           use_bedrock: "true"
