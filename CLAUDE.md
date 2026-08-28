@@ -173,6 +173,46 @@ uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@v1.0.0
 uses: dotCMS/ai-workflows/.github/workflows/claude-orchestrator.yml@main
 ```
 
+### External Action Pinning (third-party `uses:` steps)
+
+Every third-party action referenced inside this repo's own workflow files (`actions/checkout`,
+`aws-actions/configure-aws-credentials`, `astral-sh/setup-uv`, `anthropics/claude-code-action`,
+`actions/github-script`, `actions/upload-artifact`, etc.) **must be pinned to a full 40-character
+commit SHA, never a tag or branch**. Semgrep's `github-actions-mutable-action-tag` rule enforces
+this in CI. Tags are mutable — the action owner (or an attacker who compromises their account) can
+silently repoint one, as happened in the `tegioz/repo-lockdown`, `tj-actions/changed-files`, and
+`reviewdog/action-setup` supply-chain incidents. A SHA is the one reference GitHub cannot let
+anyone quietly move.
+
+Required format — SHA, then a comment with the resolved version and a link to that version's
+release page:
+
+```yaml
+uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 - https://github.com/actions/checkout/releases/tag/v7.0.1
+```
+
+**How to resolve a tag to a SHA** (don't hand-copy the SHA shown in the GitHub UI for a moving
+major like `@v7` — resolve the exact patch tag you intend to pin):
+
+```bash
+gh api repos/<owner>/<repo>/git/refs/tags/<tag> --jq '.object.sha, .object.type'
+# if .object.type is "tag" (annotated), dereference once more:
+gh api repos/<owner>/<repo>/git/tags/<sha-from-above> --jq '.object.sha'
+# confirm which version tag(s) actually point at that commit:
+gh api repos/<owner>/<repo>/tags --paginate --jq '.[] | select(.commit.sha=="<sha>") | .name'
+```
+
+**GitHub tag behavior to know:**
+- A bare major (`v7`, `v6`, `v10`) is a convenience ref some action authors move to track their
+  latest matching patch release — it is not guaranteed to exist. `astral-sh/setup-uv@v10` was
+  found dead (only `v10.0.0`/`v10.0.1` tags exist upstream, no `v10`) despite being referenced
+  live in this repo — always verify the tag resolves before trusting it (`git ls-remote --tags
+  --heads <url> <tag>` returns nothing if it doesn't).
+- Annotated tags need one extra API hop to reach the commit SHA (`git/refs/tags` returns a tag
+  object, not a commit, until dereferenced) — lightweight tags resolve directly.
+- When bumping a pinned SHA later, re-verify with the commands above rather than trusting a stale
+  comment; the version-in-comment is documentation, not a source of truth.
+
 ## Usage by Consuming Repositories
 
 Consumer repositories handle their own webhook triggers and conditional logic, then call centralized workflows. This preserves event context and prevents double triggering.
