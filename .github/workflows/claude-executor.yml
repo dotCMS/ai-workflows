@@ -117,13 +117,13 @@ jobs:
           esac
 
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 - https://github.com/actions/checkout/releases/tag/v7.0.1
         with:
           fetch-depth: 1
 
       - name: Configure AWS credentials (OIDC)
         if: inputs.provider == 'anthropic-bedrock'
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3 - https://github.com/aws-actions/configure-aws-credentials/releases/tag/v6.2.3
         with:
           role-to-assume: ${{ inputs.bedrock_role_arn }}
           aws-region: ${{ inputs.aws_region }}
@@ -190,7 +190,7 @@ jobs:
         id: claude-api
         if: inputs.provider == 'anthropic-api' && steps.api-check.outputs.available == 'true'
         continue-on-error: true
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@a60f3e1db3edbceed2b1e6c6a9d34c36b8a15eba # v1.0.209 - https://github.com/anthropics/claude-code-action/releases/tag/v1.0.209
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: ${{ inputs.prompt }}
@@ -202,7 +202,7 @@ jobs:
         id: claude-bedrock
         if: inputs.provider == 'anthropic-bedrock'
         continue-on-error: true
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@a60f3e1db3edbceed2b1e6c6a9d34c36b8a15eba # v1.0.209 - https://github.com/anthropics/claude-code-action/releases/tag/v1.0.209
         with:
           use_bedrock: "true"
           prompt: ${{ inputs.prompt }}
