@@ -70,10 +70,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 - https://github.com/actions/checkout/releases/tag/v7.0.1
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3 - https://github.com/aws-actions/configure-aws-credentials/releases/tag/v6.2.3
         with:
           role-to-assume: ${{ inputs.bedrock_role_arn }}
           aws-region: ${{ inputs.aws_region }}
@@ -90,7 +90,7 @@ jobs:
           echo "value=$ARGS" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude (Bedrock)
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183 - https://github.com/anthropics/claude-code-action/releases/tag/v1.0.183
         env:
           AUTODOC_DOTCMS_API_TOKEN_AISEARCH: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_AISEARCH }}
           AUTODOC_DOTCMS_API_TOKEN_DRAFTING: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_DRAFTING }}
@@ -105,7 +105,7 @@ jobs:
 
       - name: Upload report artifact
         if: always()
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.0
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.0 - https://github.com/actions/upload-artifact/releases/tag/v4.6.0
         with:
           name: autodoc-report
           path: /tmp/autodoc-report.md

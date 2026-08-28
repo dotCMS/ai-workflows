@@ -150,20 +150,20 @@ jobs:
       # the sticky marker from being a prefix of the SHA form.
       STICKY_MARKER: ${{ inputs.use_sticky_comment == false && format('<!-- dotcms-ai-review:v3:{0}:{1} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id, github.event.pull_request.head.sha || github.sha) || format('<!-- dotcms-ai-review:v3:{0} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 - https://github.com/actions/checkout/releases/tag/v7.0.1
         with:
           # Full working tree of the PR (merge ref) so the harness can grep/read any file,
           # not just the diff. fetch-depth:1 is enough — we read current state, not history.
           fetch-depth: 1
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3 - https://github.com/aws-actions/configure-aws-credentials/releases/tag/v6.2.3
         with:
           role-to-assume: ${{ inputs.bedrock_role_arn }}
           aws-region: ${{ inputs.aws_region }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1 - https://github.com/astral-sh/setup-uv/releases/tag/v10.0.1
         with:
           enable-cache: true
 
