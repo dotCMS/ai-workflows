@@ -96,12 +96,12 @@ jobs:
       # trailing " -->" keeps the sticky marker from being a prefix of the SHA form.
       STICKY_MARKER: ${{ inputs.use_sticky_comment == false && format('<!-- dotcms-ai-review:v3:{0}:{1} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id, github.event.pull_request.head.sha || github.sha) || format('<!-- dotcms-ai-review:v3:{0} -->', inputs.sticky_namespace != '' && inputs.sticky_namespace || inputs.model_id) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ inputs.bedrock_role_arn }}
           aws-region: ${{ inputs.aws_region }}
