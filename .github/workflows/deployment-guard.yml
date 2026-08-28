@@ -176,7 +176,7 @@ jobs:
       changed-files: ${{ steps.get-files.outputs.files }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -266,7 +266,7 @@ jobs:
       old-images: ${{ steps.check-changes.outputs.old-images }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

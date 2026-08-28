@@ -14,7 +14,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Lint workflows with actionlint (docker)
         run: |
           docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.7
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate GitHub Actions workflows
         run: |
