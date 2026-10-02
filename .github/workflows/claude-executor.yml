@@ -197,6 +197,8 @@ jobs:
           claude_args: ${{ steps.args.outputs.composed }}
           use_sticky_comment: ${{ inputs.use_sticky_comment }}
           track_progress: ${{ inputs.track_progress }}
+          # Consumers (e.g. dotCMS/core) require signed commits; this commits via the GitHub API so they're verified
+          use_commit_signing: "true"
 
       - name: Run Claude Code (Bedrock)
         id: claude-bedrock
@@ -209,6 +211,7 @@ jobs:
           claude_args: ${{ steps.args.outputs.composed }}
           use_sticky_comment: ${{ inputs.use_sticky_comment }}
           track_progress: ${{ inputs.track_progress }}
+          use_commit_signing: "true"
         env:
           AWS_REGION: ${{ inputs.aws_region }}
 
