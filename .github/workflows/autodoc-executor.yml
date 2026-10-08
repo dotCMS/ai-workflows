@@ -2,28 +2,45 @@
 # Autodoc Executor Workflow (Reusable)
 #
 # PURPOSE: Execution engine for the dotCMS autodoc documentation audit pipeline.
-# Runs Claude Code via AWS Bedrock with the AUTODOC_* secrets exposed as env vars
-# so Claude can call the dotCMS AI search and workflow APIs during execution.
-# Uploads the generated report to /tmp/autodoc-report.md as an artifact for the
-# finalize job in the calling workflow to consume.
+# Runs Claude Code via AWS Bedrock. Claude searches the dotCMS docs through the
+# `autodoc-search` command installed here, which holds the AI search token, so
+# Claude never builds authenticated requests itself. Uploads the generated report
+# as the artifact `autodoc-report` for the finalize job in the calling workflow
+# to consume.
 #
 # USAGE: Called by dotCMS/core .github/workflows/issue_autodoc.yml.
-# The calling workflow passes the fully-assembled eval context as `prompt` and
-# explicitly maps AUTODOC_* secrets and the dotCMS base URL as inputs.
+# Preferred: the caller uploads the assembled eval context as an artifact and
+# passes its name as `context_artifact`. Claude is given a short pointer prompt
+# and reads the context from disk.
+# Legacy (v3.5.0): the caller passes the full eval context as `prompt`. Do not
+# use this for new callers — a job output carrying the context is silently
+# dropped by the runner whenever its secret masker would alter the text
+# ("Skip output '...' since it may contain secret").
 #
 # SECURITY: The job_workflow_ref OIDC claim for this job resolves to
 # dotCMS/ai-workflows/.github/workflows/autodoc-executor.yml@refs/tags/<tag>,
 # which satisfies the trust condition on GitHubActions-BedrockCodeReview.
+# Claude reads issue/PR text that may come from outside dotCMS, so in context-
+# artifact mode its tools are limited to `autodoc-search`, Read and Write: no
+# general shell, no web access. The AI search token lives in a file read only by
+# `autodoc-search`, not in Claude's environment; the dotCMS drafting token never
+# enters this job at all.
 
 name: Autodoc Executor (Reusable)
 
 on:
   workflow_call:
     inputs:
-      prompt:
-        description: 'Fully assembled eval context (issue + PRs + vault + burlap prompt)'
-        required: true
+      context_artifact:
+        description: 'Name of an artifact (from the same run) containing eval_context.md. Preferred over `prompt`.'
+        required: false
         type: string
+        default: ''
+      prompt:
+        description: 'Legacy: fully assembled eval context passed inline. Ignored when context_artifact is set.'
+        required: false
+        type: string
+        default: ''
       bedrock_role_arn:
         description: 'IAM role ARN to assume via OIDC for Bedrock'
         required: true
@@ -44,21 +61,25 @@ on:
         type: number
         default: 30
       autodoc_dotcms_site_folder:
-        description: 'Site root for new content, e.g. dotcms.dev:/ (non-sensitive config, passed as input not secret). When empty, content lands on SYSTEM_HOST (dotCMS default site).'
+        description: 'Deprecated, unused since v3.6.0 (dotCMS writes happen in the caller). Accepted for compatibility.'
         required: false
         type: string
         default: ''
       autodoc_dotcms_base_url:
-        description: 'Base URL of the target dotCMS instance, e.g. https://www.dotcms.com (non-sensitive config, passed as input not secret)'
-        required: true
+        description: 'Deprecated, unused since v3.6.0 (dotCMS writes happen in the caller). Accepted for compatibility.'
+        required: false
         type: string
+        default: ''
     secrets:
       AUTODOC_DOTCMS_API_TOKEN_AISEARCH:
         description: 'Bearer token for the dotCMS AI search API (used by Claude during execution)'
         required: true
       AUTODOC_DOTCMS_API_TOKEN_DRAFTING:
-        description: 'Bearer token for the dotCMS workflow/content API'
-        required: true
+        description: 'Deprecated, unused since v3.6.0. Accepted for compatibility; never exposed to Claude.'
+        required: false
+      AUTODOC_CONTEXT_KEY:
+        description: 'Passphrase the caller used to encrypt the context artifact (openssl aes-256-cbc, pbkdf2). Required with context_artifact.'
+        required: false
 
 jobs:
   autodoc:
@@ -72,6 +93,137 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 - https://github.com/actions/checkout/releases/tag/v7.0.1
 
+      - name: Download eval context
+        if: inputs.context_artifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1 - https://github.com/actions/download-artifact/releases/tag/v8.0.1
+        with:
+          digest-mismatch: error
+          name: ${{ inputs.context_artifact }}
+          path: ${{ github.workspace }}/.autodoc
+
+      - name: Decrypt eval context
+        if: inputs.context_artifact != ''
+        env:
+          AUTODOC_CONTEXT_KEY: ${{ secrets.AUTODOC_CONTEXT_KEY }}
+          WORKDIR: ${{ github.workspace }}/.autodoc
+        run: |
+          if [ -z "$AUTODOC_CONTEXT_KEY" ]; then
+            echo "::error::context_artifact was given but secret AUTODOC_CONTEXT_KEY was not passed."
+            exit 1
+          fi
+          if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+                -in "$WORKDIR/eval_context.md.enc" -out "$WORKDIR/eval_context.md" \
+                -pass env:AUTODOC_CONTEXT_KEY; then
+            # Only the plaintext is needed from here on; the ciphertext stays in
+            # the run's artifact if anyone needs to retry.
+            rm -f "$WORKDIR/eval_context.md.enc"
+          else
+            echo "::error::Could not decrypt the eval context (missing artifact or key mismatch between caller and executor)."
+            exit 1
+          fi
+
+      - name: Compose prompt
+        id: compose
+        env:
+          CONTEXT_ARTIFACT: ${{ inputs.context_artifact }}
+          INLINE_PROMPT: ${{ inputs.prompt }}
+          WORKDIR: ${{ github.workspace }}/.autodoc
+        run: |
+          DELIM="$(openssl rand -hex 16)"
+
+          # Legacy (v3.5.0) callers: pass the inline prompt through unchanged;
+          # it already tells Claude to write /tmp/autodoc-report.md.
+          if [ -z "$CONTEXT_ARTIFACT" ]; then
+            if [ -z "$INLINE_PROMPT" ]; then
+              echo "::error::Neither context_artifact nor prompt was provided (an empty prompt usually means the caller's job output was dropped by secret masking)."
+              exit 1
+            fi
+            { echo "value<<${DELIM}"; printf '%s\n' "$INLINE_PROMPT"; echo "${DELIM}"; } >> "$GITHUB_OUTPUT"
+            echo "report=/tmp/autodoc-report.md" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CONTEXT="$WORKDIR/eval_context.md"
+          REPORT="$WORKDIR/autodoc-report.md"
+          if [ ! -s "$CONTEXT" ]; then
+            echo "::error::Eval context artifact '$CONTEXT_ARTIFACT' has no eval_context.md — refusing to run Claude without input."
+            exit 1
+          fi
+          echo "Eval context: $(wc -c < "$CONTEXT") bytes"
+
+          # The report lives inside the workspace (Claude's working directory),
+          # not /tmp, so Write needs no extra directory permissions.
+          {
+            echo "value<<${DELIM}"
+            echo "Read the file $CONTEXT in full before doing anything else. It contains an"
+            echo "evaluation context followed by your task instructions under \"## Prompt: burlap\"."
+            echo "Follow those instructions. Your report path is: $REPORT"
+            echo "Use the Write tool to write the report to exactly that path."
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
+          echo "report=$REPORT" >> "$GITHUB_OUTPUT"
+
+      - name: Install autodoc-search
+        env:
+          AUTODOC_DOTCMS_API_TOKEN_AISEARCH: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_AISEARCH }}
+        run: |
+          BIN="$RUNNER_TEMP/autodoc-bin"
+          TOKEN_FILE="$RUNNER_TEMP/autodoc-search.token"
+          mkdir -p "$BIN"
+          ( umask 077; printf '%s' "$AUTODOC_DOTCMS_API_TOKEN_AISEARCH" > "$TOKEN_FILE" )
+
+          # The token file's absolute path is baked in as the script's first
+          # assignment (shell-quoted with %q); the body is a quoted heredoc, so
+          # nothing in it is expanded at install time.
+          printf '#!/bin/bash\nTOKEN_FILE=%q\n' "$TOKEN_FILE" > "$BIN/autodoc-search"
+          cat >> "$BIN/autodoc-search" << 'SCRIPTEOF'
+          # autodoc-search "<query>" - semantic search over the dotCMS documentation.
+          # Prints the AI search API's JSON response.
+          set -euo pipefail
+          if [ -z "${*:-}" ]; then
+            echo 'usage: autodoc-search "<query>"' >&2
+            exit 2
+          fi
+          jq -n --arg q "$*" '{model: "gpt-5.2", indexName: "default", prompt: $q,
+                               operator: "cosine", threshold: ".25", searchLimit: 20}' |
+          curl -sS --fail-with-body --max-time 60 -X POST "https://cdn.dotcms.dev/api/v1/ai/search" \
+            -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+            -H "Content-Type: application/json" \
+            -H "Origin: https://dev.dotcms.com" \
+            -H "Referer: https://dev.dotcms.com/" \
+            --data @-
+          SCRIPTEOF
+          if [ ! -s "$TOKEN_FILE" ]; then
+            echo "::error::autodoc-search install failed: secret AUTODOC_DOTCMS_API_TOKEN_AISEARCH is empty."
+            exit 1
+          fi
+          chmod 755 "$BIN/autodoc-search"
+          echo "$BIN" >> "$GITHUB_PATH"
+
+          # Smoke test: a bad token or a search outage would otherwise surface
+          # only as a confident "no existing docs" report.
+          set +e
+          OUT=$("$BIN/autodoc-search" "dotCMS content types")
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            # autodoc-search exits with curl's code: 22 = HTTP error status,
+            # 28 = timeout, 6/7 = DNS/connection failure.
+            case "$RC" in
+              22) CAUSE="the API returned an HTTP error. 401/403 means AUTODOC_DOTCMS_API_TOKEN_AISEARCH is wrong or expired; 5xx means the AI search API is failing. The status and body are printed above" ;;
+              28) CAUSE="the request timed out; the AI search API is slow or unavailable" ;;
+              6|7) CAUSE="the AI search API could not be reached (DNS or connection failure)" ;;
+              *) CAUSE="curl exited with code $RC" ;;
+            esac
+            echo "::error::autodoc-search smoke test failed: $CAUSE."
+            exit 1
+          fi
+          if ! echo "$OUT" | jq -e . > /dev/null; then
+            echo "::error::autodoc-search returned non-JSON output."
+            exit 1
+          fi
+          echo "autodoc-search OK (${#OUT} bytes for smoke query)"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3 - https://github.com/aws-actions/configure-aws-credentials/releases/tag/v6.2.3
         with:
@@ -82,32 +234,81 @@ jobs:
         id: args
         env:
           MODEL_ID: ${{ inputs.model_id }}
+          CONTEXT_ARTIFACT: ${{ inputs.context_artifact }}
         run: |
-          ARGS="--allowedTools Bash,Write"
+          if [ -n "$CONTEXT_ARTIFACT" ]; then
+            # Searching goes through autodoc-search only; no general shell, no web.
+            ARGS="--allowedTools Bash(autodoc-search:*),Read,Write --disallowedTools WebFetch,WebSearch"
+          else
+            # Legacy (v3.5.0) prompts carry a raw curl command and need full Bash.
+            ARGS="--allowedTools Bash,Write"
+          fi
           if [ -n "$MODEL_ID" ]; then
             ARGS="--model $MODEL_ID $ARGS"
           fi
           echo "value=$ARGS" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude (Bedrock)
+        id: claude
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183 - https://github.com/anthropics/claude-code-action/releases/tag/v1.0.183
         env:
-          AUTODOC_DOTCMS_API_TOKEN_AISEARCH: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_AISEARCH }}
-          AUTODOC_DOTCMS_API_TOKEN_DRAFTING: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_DRAFTING }}
-          AUTODOC_DOTCMS_BASE_URL: ${{ inputs.autodoc_dotcms_base_url }}
-          AUTODOC_DOTCMS_SITE_FOLDER: ${{ inputs.autodoc_dotcms_site_folder }}
+          # Legacy prompts reference this variable in their curl command. In
+          # context-artifact mode Claude searches via autodoc-search instead and
+          # this is left empty, keeping the token out of Claude's environment.
+          # (`cond && a || b` is GitHub's documented conditional idiom.)
+          AUTODOC_DOTCMS_API_TOKEN_AISEARCH: ${{ inputs.context_artifact == '' && secrets.AUTODOC_DOTCMS_API_TOKEN_AISEARCH || '' }}
         with:
+          # Claude never needs GitHub access here. Passing this job's read-only
+          # token skips the Claude GitHub App token exchange, which (a) refuses
+          # to run when the caller's workflow differs from its default-branch
+          # copy, blocking branch dry-runs, and (b) would otherwise put an App
+          # token with write access into Claude's GH_TOKEN.
+          github_token: ${{ github.token }}
           use_bedrock: "true"
-          prompt: ${{ inputs.prompt }}
+          prompt: ${{ steps.compose.outputs.value }}
           claude_args: ${{ steps.args.outputs.value }}
           use_sticky_comment: 'false'
           track_progress: 'false'
 
+      # Tool names (and, for refused Bash calls, only the command's first word)
+      # so a run is debuggable without exposing context text in a public log.
+      - name: Summarize Claude's tool use
+        if: ${{ !cancelled() && steps.claude.outcome != 'skipped' }}
+        run: |
+          EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
+          if [ ! -s "$EXEC_FILE" ]; then
+            echo "No execution log found."
+            exit 0
+          fi
+          {
+            echo "### Claude tool use"
+            echo
+            jq -r '[.[] | select(.type == "assistant") | .message.content[]?
+                    | select(.type == "tool_use") | .name]
+                   | group_by(.) | map("- \(.[0]): \(length)") | .[]' "$EXEC_FILE"
+            echo
+            jq -r '[.[] | select(.type == "result") | .permission_denials[]?] as $d
+                   | if ($d | length) == 0 then "No refused tool calls."
+                     else "Refused tool calls:", ($d[] | "- \(.tool_name)"
+                       + (if .tool_name == "Bash"
+                          then " (`\((.tool_input.command // "") | split(" ")[0])`)"
+                          else "" end))
+                     end' "$EXEC_FILE"
+          } | tee -a "$GITHUB_STEP_SUMMARY" || echo "Could not parse the execution log."
+
+      - name: Fail if the action skipped itself
+        if: steps.claude.outputs.skipped_due_to_workflow_validation_mismatch == 'true'
+        run: |
+          echo "::error::claude-code-action skipped (workflow validation) without running Claude"
+          exit 1
+
+      # Skipped when Claude never ran (an earlier setup step failed), so that
+      # step's error is the one reported rather than a secondary "no files found".
       - name: Upload report artifact
-        if: always()
+        if: ${{ !cancelled() && steps.claude.outcome != 'skipped' }}
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.0 - https://github.com/actions/upload-artifact/releases/tag/v4.6.0
         with:
           name: autodoc-report
-          path: /tmp/autodoc-report.md
-          if-no-files-found: warn
+          path: ${{ steps.compose.outputs.report }}
+          if-no-files-found: error
           retention-days: 1
