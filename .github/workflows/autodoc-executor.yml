@@ -252,16 +252,42 @@ jobs:
           use_sticky_comment: 'false'
           track_progress: 'false'
 
+      # Tool names (and, for refused Bash calls, only the command's first word)
+      # so a run is debuggable without exposing context text in a public log.
+      - name: Summarize Claude's tool use
+        if: ${{ !cancelled() && steps.claude.outcome != 'skipped' }}
+        run: |
+          EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
+          if [ ! -s "$EXEC_FILE" ]; then
+            echo "No execution log found."
+            exit 0
+          fi
+          {
+            echo "### Claude tool use"
+            echo
+            jq -r '[.[] | select(.type == "assistant") | .message.content[]?
+                    | select(.type == "tool_use") | .name]
+                   | group_by(.) | map("- \(.[0]): \(length)") | .[]' "$EXEC_FILE"
+            echo
+            jq -r '[.[] | select(.type == "result") | .permission_denials[]?] as $d
+                   | if ($d | length) == 0 then "No refused tool calls."
+                     else "Refused tool calls:", ($d[] | "- \(.tool_name)"
+                       + (if .tool_name == "Bash"
+                          then " (`\((.tool_input.command // "") | split(" ")[0])`)"
+                          else "" end))
+                     end' "$EXEC_FILE"
+          } | tee -a "$GITHUB_STEP_SUMMARY" || echo "Could not parse the execution log."
+
       - name: Fail if the action skipped itself
         if: steps.claude.outputs.skipped_due_to_workflow_validation_mismatch == 'true'
         run: |
           echo "::error::claude-code-action skipped (workflow validation) without running Claude"
           exit 1
 
-      # Skipped when an earlier setup step failed, so that step's error is the
-      # one reported rather than a secondary "no files found".
+      # Skipped when Claude never ran (an earlier setup step failed), so that
+      # step's error is the one reported rather than a secondary "no files found".
       - name: Upload report artifact
-        if: ${{ !cancelled() && steps.compose.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.claude.outcome != 'skipped' }}
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.6.0 - https://github.com/actions/upload-artifact/releases/tag/v4.6.0
         with:
           name: autodoc-report
