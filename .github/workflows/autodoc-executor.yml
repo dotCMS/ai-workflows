@@ -21,10 +21,10 @@
 # dotCMS/ai-workflows/.github/workflows/autodoc-executor.yml@refs/tags/<tag>,
 # which satisfies the trust condition on GitHubActions-BedrockCodeReview.
 # Claude reads issue/PR text that may come from outside dotCMS, so in context-
-# artifact mode its tools are limited to `autodoc-search`, Read and Write: no
-# general shell, no web access. The AI search token lives in a file read only by
-# `autodoc-search`, not in Claude's environment; the dotCMS drafting token never
-# enters this job at all.
+# artifact mode its only tools are Read, Write and Bash restricted to
+# `autodoc-search`: no general shell, no web, no subagents. The AI search token
+# lives in a file read only by `autodoc-search`, not in Claude's environment;
+# the dotCMS drafting token never enters this job at all.
 
 name: Autodoc Executor (Reusable)
 
@@ -166,32 +166,57 @@ jobs:
       - name: Install autodoc-search
         env:
           AUTODOC_DOTCMS_API_TOKEN_AISEARCH: ${{ secrets.AUTODOC_DOTCMS_API_TOKEN_AISEARCH }}
+          PAGES_DIR: ${{ github.workspace }}/.autodoc/pages
         run: |
           BIN="$RUNNER_TEMP/autodoc-bin"
           TOKEN_FILE="$RUNNER_TEMP/autodoc-search.token"
           mkdir -p "$BIN"
           ( umask 077; printf '%s' "$AUTODOC_DOTCMS_API_TOKEN_AISEARCH" > "$TOKEN_FILE" )
 
-          # The token file's absolute path is baked in as the script's first
-          # assignment (shell-quoted with %q); the body is a quoted heredoc, so
-          # nothing in it is expanded at install time.
-          printf '#!/bin/bash\nTOKEN_FILE=%q\n' "$TOKEN_FILE" > "$BIN/autodoc-search"
+          # The token file and pages directory paths are baked in as the script's
+          # first assignments (shell-quoted with %q); the body is a quoted heredoc,
+          # so nothing in it is expanded at install time.
+          printf '#!/bin/bash\nTOKEN_FILE=%q\nPAGES_DIR=%q\n' "$TOKEN_FILE" "$PAGES_DIR" > "$BIN/autodoc-search"
           cat >> "$BIN/autodoc-search" << 'SCRIPTEOF'
           # autodoc-search "<query>" - semantic search over the dotCMS documentation.
-          # Prints the AI search API's JSON response.
+          # Prints a ranked list of matching pages with excerpts, and saves each
+          # page's full text to $PAGES_DIR/<urlTitle>.md for the Read tool. The raw
+          # API response (~500 KB: full page bodies plus metadata) is too large for
+          # Claude to read as command output, which made it improvise filters.
           set -euo pipefail
           if [ -z "${*:-}" ]; then
             echo 'usage: autodoc-search "<query>"' >&2
             exit 2
           fi
-          jq -n --arg q "$*" '{model: "gpt-5.2", indexName: "default", prompt: $q,
+          RAW=$(jq -n --arg q "$*" '{model: "gpt-5.2", indexName: "default", prompt: $q,
                                operator: "cosine", threshold: ".25", searchLimit: 20}' |
           curl -sS --fail-with-body --max-time 60 -X POST "https://cdn.dotcms.dev/api/v1/ai/search" \
             -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
             -H "Content-Type: application/json" \
             -H "Origin: https://dev.dotcms.com" \
             -H "Referer: https://dev.dotcms.com/" \
-            --data @-
+            --data @-) || { RC=$?; printf '%s\n' "${RAW:-}" >&2; exit "$RC"; }
+
+          mkdir -p "$PAGES_DIR"
+          # urlTitle becomes a filename, so only slugs are saved.
+          jq -c '.dotCMSResults[]? | {u: (.urlTitle // ""), t: (.title // ""),
+                                      m: (.modDate // ""), d: (.documentation // "")}' <<< "$RAW" |
+          while IFS= read -r ROW; do
+            U=$(jq -r .u <<< "$ROW")
+            [[ "$U" =~ ^[a-z0-9][a-z0-9-]*$ ]] || continue
+            jq -r '"# \(.t)\n\nurlTitle: \(.u)\nmodified: \(.m)\n\n\(.d)"' <<< "$ROW" > "$PAGES_DIR/$U.md"
+          done
+
+          jq -r --arg dir "$PAGES_DIR" '
+            "Query: \(.query // "")", "Results: \(.dotCMSResults // [] | length)", "",
+            (.dotCMSResults // [] | to_entries[] | .key as $i | .value |
+              ((.urlTitle // "") | test("^[a-z0-9][a-z0-9-]*$")) as $slug |
+              "\($i + 1). \(.title // "(untitled)")  (urlTitle: \(.urlTitle // "none"), modified \((.modDate // "")[:10]))",
+              ([.matches[]?.distance | numbers] | min | if . then "   distance: \(. * 1000 | round / 1000)" else empty end),
+              (if (.seoDescription // "") != "" then "   summary: \(.seoDescription)" else empty end),
+              ([.matches[]? | .extractedText // empty] | .[:2][] | "   excerpt: \(gsub("\\s+"; " ") | .[:400])"),
+              (if $slug then "   full text: \($dir)/\(.urlTitle).md" else empty end),
+              "")' <<< "$RAW"
           SCRIPTEOF
           if [ ! -s "$TOKEN_FILE" ]; then
             echo "::error::autodoc-search install failed: secret AUTODOC_DOTCMS_API_TOKEN_AISEARCH is empty."
@@ -218,11 +243,13 @@ jobs:
             echo "::error::autodoc-search smoke test failed: $CAUSE."
             exit 1
           fi
-          if ! echo "$OUT" | jq -e . > /dev/null; then
-            echo "::error::autodoc-search returned non-JSON output."
+          if ! grep -qE '^Results: [1-9]' <<< "$OUT"; then
+            echo "::error::autodoc-search returned no results for the smoke query; the documentation index may be empty or the response malformed."
             exit 1
           fi
-          echo "autodoc-search OK (${#OUT} bytes for smoke query)"
+          # The smoke query's saved pages shouldn't look like Claude's own results.
+          rm -rf "${PAGES_DIR:?}"
+          echo "autodoc-search OK ($(grep -m1 '^Results:' <<< "$OUT"), ${#OUT} bytes for smoke query)"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3 - https://github.com/aws-actions/configure-aws-credentials/releases/tag/v6.2.3
@@ -237,8 +264,10 @@ jobs:
           CONTEXT_ARTIFACT: ${{ inputs.context_artifact }}
         run: |
           if [ -n "$CONTEXT_ARTIFACT" ]; then
-            # Searching goes through autodoc-search only; no general shell, no web.
-            ARGS="--allowedTools Bash(autodoc-search:*),Read,Write --disallowedTools WebFetch,WebSearch"
+            # --tools is the whole tool set: other built-ins (Agent, ToolSearch,
+            # Edit, web tools...) don't exist in the session. --allowedTools then
+            # limits Bash to autodoc-search, so Claude needs no permission prompts.
+            ARGS="--tools Bash,Read,Write --allowedTools Bash(autodoc-search:*),Read,Write"
           else
             # Legacy (v3.5.0) prompts carry a raw curl command and need full Bash.
             ARGS="--allowedTools Bash,Write"
