@@ -61,7 +61,7 @@ jobs:
       trigger_mode: interactive
       claude_args: '--allowedTools "Bash(terraform validate),Bash(terraform plan),Bash(terraform fmt),Bash(terragrunt validate),Bash(terragrunt plan),Bash(terragrunt hclfmt),Bash(git status),Bash(git diff)"'
       timeout_minutes: 15
-      runner: ubuntu-latest
+      runner: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
       enable_mention_detection: true  # Uses built-in @claude mention detection
       # custom_trigger_condition: |    # Optional: Custom trigger logic
       #   github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'infrastructure')
@@ -101,7 +101,7 @@ jobs:
         🔴/🟠 are blocking; 🟡 is non-blocking. If the PR is clean, say so in one sentence.
       claude_args: '--allowedTools "Bash(terraform validate),Bash(terraform plan),Bash(terraform fmt),Bash(terragrunt validate),Bash(terragrunt plan),Bash(terragrunt hclfmt),Bash(git status),Bash(git diff)"'
       timeout_minutes: 15
-      runner: ubuntu-latest
+      runner: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
       enable_mention_detection: false  # No mention detection for automatic reviews
       # skip_automatic_when_mentioned: false  # Optional: allow automatic mode even with @claude mention
       # custom_trigger_condition: |     # Optional: Custom logic for infrastructure changes

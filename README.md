@@ -292,7 +292,7 @@ jobs:
 | `direct_prompt` | Custom prompt for automatic mode | No | - |
 | `allowed_tools` | Custom allowed tools configuration | No | `Bash(git status)`<br>`Bash(git diff)` |
 | `timeout_minutes` | Timeout for Claude execution | No | 15 |
-| `runner` | GitHub runner to use | No | ubuntu-latest |
+| `runner` | GitHub runner to use | No | `ubuntu-` plus `vars.UBUNTU_RUNNER_VERSION` of the calling repository, `24.04` when unset |
 | `enable_mention_detection` | Enable built-in @claude mention detection | No | true |
 | `skip_automatic_when_mentioned` | Skip automatic mode when PR title/body contains @claude | No | true |
 | `custom_trigger_condition` | Custom condition to override default detection | No | - |

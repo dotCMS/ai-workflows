@@ -354,7 +354,7 @@ Sophisticated version comparison supporting dotCMS format: `YY.MM.DD[-REBUILD][_
 
 ### Claude Workflows
 - **Timeout**: 15 minutes
-- **Runner**: ubuntu-latest
+- **Runner**: `ubuntu-` plus the calling repository's `UBUNTU_RUNNER_VERSION` variable (`24.04` when unset)
 - **Default Tools**: `git status` and `git diff`
 - **Mention Detection**: Case-insensitive @claude in comments, reviews, issues, and PRs
 - **Concurrency**: Consumer repositories should implement concurrency control to prevent duplicate runs

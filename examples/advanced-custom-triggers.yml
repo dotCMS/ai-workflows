@@ -43,7 +43,7 @@ jobs:
         )
       claude_args: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes: 10
-      runner: ubuntu-latest
+      runner: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
       enable_mention_detection: false  # Disable default @claude detection since we have custom logic
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -69,7 +69,7 @@ jobs:
         - Impact on existing functionality
       claude_args: '--allowedTools "Bash(git status),Bash(git diff),Bash(grep -r \"config\" .)"'
       timeout_minutes: 15
-      runner: ubuntu-latest
+      runner: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
       enable_mention_detection: false
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -100,7 +100,7 @@ jobs:
         - Impact on existing security controls
       claude_args: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes: 20
-      runner: ubuntu-latest
+      runner: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
       enable_mention_detection: false
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -113,7 +113,7 @@ jobs:
       # No custom condition - will use default @claude mention detection
       claude_args: '--allowedTools "Bash(git status),Bash(git diff)"'
       timeout_minutes: 15
-      runner: ubuntu-latest
+      runner: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
       enable_mention_detection: true  # Use default @claude mention detection
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
