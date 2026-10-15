@@ -70,11 +70,11 @@ on:
         description: 'GitHub runner label'
         required: false
         type: string
-        default: 'ubuntu-latest'
+        default: ''
 
 jobs:
   review:
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner || format('ubuntu-{0}', vars.UBUNTU_RUNNER_VERSION || '24.04') }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     permissions:
       id-token: write       # OIDC -> STS

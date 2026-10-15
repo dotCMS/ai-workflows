@@ -66,7 +66,7 @@ permissions:
 jobs:
   check-org-membership:
     name: Check Organization Membership
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
     outputs:
       is-org-member: ${{ steps.check.outputs.is_member }}
       pr-author: ${{ steps.check.outputs.author }}
@@ -75,7 +75,7 @@ jobs:
     steps:
       - name: Check if PR author is organization member
         id: check
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0 - https://github.com/actions/github-script/releases/tag/v7.1.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 - https://github.com/actions/github-script/releases/tag/v9.0.0
         with:
           script: |
             const trustedOrg = '${{ inputs.trusted_organization }}';
@@ -166,7 +166,7 @@ jobs:
 
   validate-changed-files:
     name: Validate Changed Files
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
     needs: check-org-membership
     if: |
       inputs.enable_file_allowlist &&
@@ -253,7 +253,7 @@ jobs:
 
   validate-image-only-changed:
     name: Validate Only Image Changed
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
     needs: [check-org-membership, validate-changed-files]
     if: |
       always() &&
@@ -383,7 +383,7 @@ jobs:
 
   validate-images:
     name: Validate Images
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
     needs: [check-org-membership, validate-image-only-changed]
     if: |
       always() &&
@@ -626,7 +626,7 @@ jobs:
 
   finalize:
     name: Final Status
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
     needs: [check-org-membership, validate-changed-files, validate-image-only-changed, validate-images]
     if: always()
     steps:
@@ -745,7 +745,7 @@ jobs:
 
       - name: Create PR comment
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0 - https://github.com/actions/github-script/releases/tag/v7.1.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0 - https://github.com/actions/github-script/releases/tag/v9.0.0
         with:
           script: |
             const shouldBypass = '${{ needs.check-org-membership.outputs.should-bypass }}' === 'true';

@@ -44,10 +44,10 @@ on:
         type: number
         default: 15
       runner:
-        description: 'GitHub runner to use'
+        description: 'GitHub runner to use; empty uses ubuntu-UBUNTU_RUNNER_VERSION (default 24.04) from the calling repository variables'
         required: false
         type: string
-        default: 'ubuntu-latest'
+        default: ''
       enable_mention_detection:
         description: 'Enable automatic @claude mention detection for interactive mode'
         required: false
@@ -176,7 +176,7 @@ jobs:
           )
         )
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-${{ vars.UBUNTU_RUNNER_VERSION || '24.04' }}
     outputs:
       # One JSON array per executor — each entry is a model that routes there.
       # An executor job runs once per entry via strategy.matrix (or is skipped when '[]').
