@@ -76,3 +76,31 @@ jobs:
               fi
             fi
           done
+
+  shellcheck-embedded-scripts:
+    name: Shellcheck scripts embedded in workflows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 - https://github.com/actions/checkout/releases/tag/v7.0.1
+
+      # actionlint shellchecks each run: block, but a script written out through a
+      # quoted heredoc is just data to it. Extract such scripts and check them.
+      - name: Shellcheck autodoc-search
+        run: |
+          python3 - > "$RUNNER_TEMP/autodoc-search" << 'PYEOF'
+          import re, yaml
+          wf = yaml.safe_load(open('.github/workflows/autodoc-executor.yml'))
+          run = next(s['run'] for s in wf['jobs']['autodoc']['steps']
+                     if s.get('name') == 'Install autodoc-search')
+          body = re.search(r"<< 'SCRIPTEOF'\n(.*?)\nSCRIPTEOF\n", run, re.S).group(1)
+          # Stand-ins for the assignments the install step writes before the body.
+          names = re.findall(r'\\n([A-Z_]+)=%q', run)
+          print('#!/bin/bash')
+          print('\n'.join(f'{n}=x' for n in names))
+          print(body)
+          PYEOF
+          shellcheck --version | head -2
+          shellcheck "$RUNNER_TEMP/autodoc-search"
